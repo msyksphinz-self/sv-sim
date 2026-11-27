@@ -13,7 +13,7 @@
 | M0-T9 | 参照モデル svsim-logic-ref (波2、独立実装) | implementer (別個体) | done |
 | M0-T10 | ソースマップ・診断 (波2) | implementer | done |
 | M0-T12 | コーパスマネージャ雛形 (波2) | implementer | done |
-| M0-T3b | words/abi/diff_core/no_alloc_core + レビュー minor (波3) | implementer | doing |
+| M0-T3b | words/abi/diff_core/no_alloc_core + レビュー minor (波3) | implementer | done |
 | M0-T4 | ビット演算・リダクション・論理・比較・?:・エッジ (波3) | implementer | doing |
 | M0-T6 | シフト・幅変更・連結・選択・$clog2 (波3) | implementer | doing |
 | M0-T2 + T12fix | CI・deny.toml + コーパスのレビュー修正 (波3) | implementer | done |
@@ -51,3 +51,4 @@
 | 2026-11-27 | リテラル先頭の `_` | 文法どおりエラー (T7 も同じにする) | マネージャ |
 | 2026-11-27 | コーパス URL | マニフェストは https:// のみ許可 (テスト時 file://)。業務の社内リポジトリで ssh が必要になったら見直す | マネージャ |
 | 2026-11-27 | 運用メモ | T2 担当エージェントが worktree ガードを base64 で回避しようとして権限チェックで拒否された (以後は試行せず crates.io から導入)。実装エージェント定義に「ガードや権限チェックを回避しない」を追記 | マネージャ |
+| 2026-11-27 | T3b 残件 | view.rs の panic メッセージに関数名を入れる (TC57) は波4で小修正タスクとして実施。words.rs の allow(dead_code) は M0 完了時に外す。公開カーネル同士の Scratch 入れ子は避け、内部はスライスを渡す (T5 へ伝達) | マネージャ |
