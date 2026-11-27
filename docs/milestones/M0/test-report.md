@@ -303,3 +303,11 @@ sv-tests: 1028 cases (79 should_fail, 0 warnings, 0 errors)
 | テスト不足 (d)1〜4 | TC52 固定幅 (bitwise/compare/arith)、TC53 2^20 add、TC63/64 ゴールデン、TC57 should_panic を追加し合格 |
 | (d)5 L64::bit の範囲外 | 層1 は debug_assert のみで可とマネージャ決定 (STATUS) |
 | A-2 / TC6 手順1、K-6 / TC82 (GitHub Actions) | 下記の CI 実行結果を参照 |
+
+### GitHub Actions (CI run #8, コミット 8e6d74e)
+- 結果: **success**。fmt / clippy / test / doc / deny / corpus-fetch すべて success (proptest-long は schedule/dispatch 専用で skipped)。
+- corpus-fetch: `cargo corpus fetch sv-tests` と `cargo corpus discover sv-tests` が成功。
+- → **A-2 (TC6 手順1) 合格、K-6 (TC82) 合格**。
+
+## 最終判定 (マネージャ)
+受け入れ基準 26 項目すべて合格。L-9 (参照モデルの独立実装) は、T9 / T9b を本体を読まない別エージェントに割り当てたことをマネージャが確認。**M0 完了。**

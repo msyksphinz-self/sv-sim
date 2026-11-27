@@ -1,5 +1,7 @@
 # 進捗 (マネージャが更新)
 
+**M0 基盤: 完了 (2026-11-27)。** 受け入れ基準 26/26 合格、CI run #8 success。次は M1 (Verilog コア)。
+
 状態: todo / doing / review / done / blocked
 
 ## M0 基盤
