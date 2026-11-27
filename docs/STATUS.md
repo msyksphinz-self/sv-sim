@@ -17,12 +17,12 @@
 | M0-T4 | ビット演算・リダクション・論理・比較・?:・エッジ (波3) | implementer | done |
 | M0-T6 | シフト・幅変更・連結・選択・$clog2 (波3) | implementer | done |
 | M0-T2 + T12fix | CI・deny.toml + コーパスのレビュー修正 (波3) | implementer | done |
-| M0-T5 | 算術 (+ - * / % **、混在 pow_bits) (波4) | implementer | doing |
+| M0-T5 | 算術 (+ - * / % **、混在 pow_bits) (波4) | implementer | done |
 | M0-T7 | リテラル・整数変換・文字列 (波4) | implementer | done |
 | M0-T8 | 実数変換・表示フォーマット (波4) | implementer | done |
 | M0-T13 | コーパス段階評価 + CI corpus-fetch + 波3 nit (波4) | implementer | done |
 | M0-T11 | インターン・アリーナ (波5) | implementer | doing |
-| M0-T14 | 整理 (改名・補助統合・正規化修正) (波5) | implementer | todo |
+| M0-T14 | 整理 (改名・補助統合・正規化修正) (波5) | implementer | doing |
 | M0-T9b | 参照モデル RealToIntStatus 4種化 (本体を読まない別個体) | implementer | done |
 | M0-TR | テスト実行 | test-runner | todo |
 
