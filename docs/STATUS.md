@@ -23,7 +23,7 @@
 | M0-T13 | コーパス段階評価 + CI corpus-fetch + 波3 nit (波4) | implementer | done |
 | M0-T11 | インターン・アリーナ (波5) | implementer | done |
 | M0-T14 | 整理 (改名・補助統合・正規化修正) (波5) | implementer | done |
-| M0-CR5 | 波5 コードレビュー (T11/T13b/T14) | code-reviewer | doing |
+| M0-CR5 | 波5 コードレビュー (T11/T13b/T14) | code-reviewer | done |
 | M0-T13b | コーパスのパス安全性修正 (波4レビュー) | implementer | done |
 | M0-T9b | 参照モデル RealToIntStatus 4種化 (本体を読まない別個体) | implementer | done |
 | M0-TR | テスト実行 (test-plan v2 全 82 項目) | test-runner | doing |
@@ -76,3 +76,18 @@
 | 2026-11-27 | 波4レビュー | T5/T7/T8/T9b 承認、T13 修正後承認 (minor: 明示 :files: の外部パス、--json の絶対パス)。レビュアの独立モデル照合: 算術 6万件・実数 80万件・log10 定数 全件で不一致 0。修正は M0-T13b | マネージャ |
 | 2026-11-27 | M1 への持ち越し | コーパス runner はファイルを開く時にシンボリックリンクでチェックアウト外に出ないか確認する (T13b の検査は字句のみ) | マネージャ |
 | 2026-11-27 | T14 | Logic::not (1bit, const fn) は固有メソッドのまま。BitVec の bool 版は bit_eq/bit_ne。fmt 幅0 dst の状態は本体・参照・Q-6 の3者一致 | マネージャ |
+| 2026-11-27 | 波5レビュー | T11/T14 承認、T13b 修正後承認 (minor のみ)。汚れた dst で層2全カーネル 5246 件合格、T14 前後で出力ハッシュ 7952 件完全一致 | マネージャ |
+
+## M1 に持ち越す作業 (バックログ)
+| 項目 | 由来 |
+|---|---|
+| コーパスのパス検査を OS 非依存に (`\` と `:` を常に拒否、Windows 形式のテスト 4 件)。空白だけの :files: に警告。結合パスの正規化 | 波5レビュー (T13b) |
+| コーパス runner でファイルを開くときにシンボリックリンクで外に出ないか確認 | T13b |
+| discover の厳格モード (解析エラーで終了コード 1、CI で 1028 件を検査) | T13 |
+| should_fail の判定規則 (target 前段の Fail を AsExpected にする暫定規則) の見直し | T13 / plan §7.4 |
+| Interner の文字列二重保持の解消、u32::MAX 予約の方針を index と揃える | 波5レビュー (T11) |
+| アリーナのスナップショットに layout 識別子 (M4/M6 候補) | 波5レビュー (T11) |
+| shift の one_pass テストに 2 値版を追加 | 波5レビュー (T14) |
+| VCS 確認用 SV テスト集 (plan.md §11 の V-1〜V-18、test-plan 付録 A) を作成し、ユーザに業務環境の VCS で実行してもらう | U-7 |
+| FileOrigin::Include の設計見直し、全角文字の表示幅 | T10 |
+| リテラル幅 > MAX_WIDTH の診断 (警告/エラー) | T7 |
