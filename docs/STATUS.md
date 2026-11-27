@@ -23,7 +23,7 @@
 | M0-T13 | コーパス段階評価 + CI corpus-fetch + 波3 nit (波4) | implementer | done |
 | M0-T11 | インターン・アリーナ (波5) | implementer | done |
 | M0-T14 | 整理 (改名・補助統合・正規化修正) (波5) | implementer | doing |
-| M0-T13b | コーパスのパス安全性修正 (波4レビュー) | implementer | doing |
+| M0-T13b | コーパスのパス安全性修正 (波4レビュー) | implementer | done |
 | M0-T9b | 参照モデル RealToIntStatus 4種化 (本体を読まない別個体) | implementer | done |
 | M0-TR | テスト実行 | test-runner | todo |
 
@@ -73,3 +73,4 @@
 | 2026-11-27 | alloc(0, align) 変更 | 先の決定を変更: BadAlign 検査のみ行い、整列せず現在位置を返す (次位置も進めない)。オフセットが常にレイアウト長以下になり、幅0ビューが範囲外にならないため。test-plan TC68 の期待値を更新すること | マネージャ |
 | 2026-11-27 | svsim-common のテスト | proptest は dev-dependency に追加せず、決定的 xorshift で代用 | マネージャ |
 | 2026-11-27 | 波4レビュー | T5/T7/T8/T9b 承認、T13 修正後承認 (minor: 明示 :files: の外部パス、--json の絶対パス)。レビュアの独立モデル照合: 算術 6万件・実数 80万件・log10 定数 全件で不一致 0。修正は M0-T13b | マネージャ |
+| 2026-11-27 | M1 への持ち越し | コーパス runner はファイルを開く時にシンボリックリンクでチェックアウト外に出ないか確認する (T13b の検査は字句のみ) | マネージャ |
