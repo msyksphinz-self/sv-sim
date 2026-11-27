@@ -20,8 +20,10 @@
 
 /// 1 ワードあたりに [`Scratch::reserve_for`] が確保するワード数。
 ///
-/// 目安 (plan.md §3.5(c)): `div` が `2·nw + 1`、`mul` が `nw`。べき乗は `mul` の作業領域に加えて
-/// 底の写しと結果で `2·nw` 程度、10 進書式化は被除数の写しで `nw` を使う。余裕を見て `4·nw + 4`。
+/// 算術 (M0-T5、`ops/arith.rs`) の実際の必要量: `div`/`rem` (Knuth D の正規化した被除数と除数) が
+/// `2·nw + 1` で最大、`mul_assign`/`pow`/`pow_bits` が `nw`、`mul` は 0。幅 ≤ 64 は作業領域を使わない。
+/// 10 進書式化 (M0-T8) は被除数の写しで `nw` を使う。並行して作る T7/T8 の分の余裕を残して `4·nw + 4`
+/// のままにしている (M0 完了時に、全カーネルの必要量の最大に合わせて詰めてよい)。
 const WORDS_PER_WORD: usize = 4;
 /// [`Scratch::reserve_for`] が加える固定のワード数。
 const EXTRA_WORDS: usize = 4;
@@ -58,7 +60,8 @@ impl Scratch {
 
     /// 幅 `width` までの、どの M0 のカーネルにも足りるワード数 (`4·nw + 4`)。
     ///
-    /// この見積もりは暫定で、乗除算・べき乗の実装 (M0-T5) で実際の必要量に合わせて見直す。
+    /// 算術のカーネル (M0-T5) の最大は `div`/`rem` の `2·nw + 1` で、この値はそれを上回る
+    /// (内訳は `WORDS_PER_WORD` の説明を参照)。
     #[inline]
     pub const fn words_needed(width: u32) -> usize {
         WORDS_PER_WORD * crate::layout::words_for(width) + EXTRA_WORDS

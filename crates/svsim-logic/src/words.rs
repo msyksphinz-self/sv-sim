@@ -1,4 +1,5 @@
-//! 2 値のワード列プリミティブ (add/sub/neg/shift/mul_small_add/divrem_small/cmp/is_zero)。crate 内専用。
+//! 2 値のワード列プリミティブ (add/sub/neg/shift/mul_small_add/divrem_small/cmp/is_zero、
+//! 算術 (M0-T5) 用の mul_lo/divrem_in_place)。crate 内専用。
 //!
 //! 値は `u64` のリトルエンディアンのワード列 (ワード 0 が最下位、plan.md §3.2) で、幅の情報を持たない。
 //! 2 値カーネルの aval プレーンや、4 値の算術で「未知が無い」と分かったあとの aval プレーンに使う
@@ -289,6 +290,142 @@ pub(crate) fn significant_words(x: &[u64]) -> usize {
     x.iter().rposition(|&w| w != 0).map_or(0, |i| i + 1)
 }
 
+/// `dst = x · y` の下位 `dst.len()` ワード (2^(64·len) の剰余)。
+///
+/// 乗算の下位ビットは符号の解釈に依らない (§11.4.3) ので、符号付きの乗算にもそのまま使える。
+/// `dst` は `x`, `y` と別の領域 (借用規則で保証される)。計算量は O(len²/2)。
+pub(crate) fn mul_lo(dst: &mut [u64], x: &[u64], y: &[u64]) {
+    assert_eq!(dst.len(), x.len(), "words::mul_lo: length mismatch");
+    assert_eq!(dst.len(), y.len(), "words::mul_lo: length mismatch");
+    let n = dst.len();
+    dst.fill(0);
+    let ny = significant_words(y);
+    for (i, &xi) in x.iter().enumerate().take(significant_words(x)) {
+        if xi == 0 {
+            continue;
+        }
+        // dst[i..] += xi · y (n - i ワードで切り詰め)
+        let mut carry = 0u64;
+        for j in 0..ny.min(n - i) {
+            let t = (xi as u128) * (y[j] as u128) + dst[i + j] as u128 + carry as u128;
+            dst[i + j] = t as u64;
+            carry = (t >> 64) as u64;
+        }
+        if i + ny < n {
+            // 前の行の繰り上がりが dst[i + ny] 以上に伝わっていることがあるので、足し込む。
+            add_small_assign(&mut dst[i + ny..], carry);
+        }
+    }
+}
+
+/// Knuth の Algorithm D (TAOCP 2 巻 §4.3.1) による多倍長の符号なし除算。`u64` のワードと `u128` の
+/// 中間値を使う。
+///
+/// 入力 (呼び出し側が用意する作業領域):
+/// - `un`: 長さ `n + 1`。`un[..n]` に被除数を入れ、`un[n] = 0` にしておく。
+/// - `vn`: 長さ `n`。除数 (0 でないこと)。
+///
+/// 出力:
+/// - `q` (`Some` のとき、長さ `n`): 商。
+/// - `un[..n]`: 剰余 (`un[n]` は 0)。
+/// - `vn` は壊れる (正規化のためにずらす)。
+///
+/// 作業領域はこの 2 本だけで、ヒープ確保をしない。
+///
+/// # Panics
+/// 長さが合わない場合、除数が 0 の場合 (crate 内の誤用。0 除算の意味論 (§11.4.3 の X) は呼び出し側で
+/// 先に扱う)。
+pub(crate) fn divrem_in_place(un: &mut [u64], vn: &mut [u64], mut q: Option<&mut [u64]>) {
+    let n = vn.len();
+    assert_eq!(
+        un.len(),
+        n + 1,
+        "words::divrem_in_place: un must have n + 1 words"
+    );
+    debug_assert_eq!(un[n], 0, "words::divrem_in_place: un[n] must be 0");
+    if let Some(q) = q.as_deref_mut() {
+        assert_eq!(q.len(), n, "words::divrem_in_place: q length mismatch");
+        q.fill(0);
+    }
+    let nv = significant_words(vn);
+    assert!(nv != 0, "words::divrem_in_place: division by zero");
+    let nu = significant_words(&un[..n]);
+    if nu < nv {
+        // 被除数 < 除数: 商 0、剰余 = 被除数 (un はそのまま)。
+        return;
+    }
+    if nv == 1 {
+        // 除数が 1 ワード: 上から 1 ワードずつ割る。
+        let r = divrem_small(&mut un[..nu], vn[0]);
+        if let Some(q) = q {
+            q[..nu].copy_from_slice(&un[..nu]);
+        }
+        un.fill(0);
+        un[0] = r;
+        return;
+    }
+
+    // D1: 正規化。除数の最上位ワードの最上位ビットが 1 になるようにずらす。
+    let s = vn[nv - 1].leading_zeros();
+    shl_assign(&mut vn[..nv], s as u64);
+    // un[nu] は 0 (nu <= n で、un[n] = 0) なので、あふれたビットはそこに入る。
+    shl_assign(&mut un[..=nu], s as u64);
+
+    let vtop = vn[nv - 1] as u128;
+    let vsec = vn[nv - 2] as u128;
+    let m = nu - nv;
+    // D2〜D7: 商の各ワードを上から求める。
+    for j in (0..=m).rev() {
+        // D3: qhat の見積もり。un[j + nv] <= vtop なので qhat < 2^64 + 2。
+        let num = ((un[j + nv] as u128) << 64) | un[j + nv - 1] as u128;
+        let mut qhat = num / vtop;
+        let mut rhat = num % vtop;
+        // `||` の短絡で、乗算は qhat < 2^64 のときだけ行う (u128 であふれない)。
+        while qhat >> 64 != 0 || qhat * vsec > ((rhat << 64) | un[j + nv - 2] as u128) {
+            qhat -= 1;
+            rhat += vtop;
+            if rhat >> 64 != 0 {
+                break;
+            }
+        }
+        let qhat = qhat as u64;
+
+        // D4: un[j..=j + nv] -= qhat · vn
+        let mut mul_carry = 0u64;
+        let mut borrow = false;
+        for i in 0..nv {
+            let p = (qhat as u128) * (vn[i] as u128) + mul_carry as u128;
+            mul_carry = (p >> 64) as u64;
+            let (d, b) = un[i + j].borrowing_sub(p as u64, borrow);
+            un[i + j] = d;
+            borrow = b;
+        }
+        let (d, b) = un[j + nv].borrowing_sub(mul_carry, borrow);
+        un[j + nv] = d;
+
+        // D5/D6: 引きすぎた (結果が負) なら、qhat を 1 減らして除数を 1 回足し戻す (add back)。
+        let qj = if b {
+            let mut carry = false;
+            for i in 0..nv {
+                let (s, c) = un[i + j].carrying_add(vn[i], carry);
+                un[i + j] = s;
+                carry = c;
+            }
+            un[j + nv] = un[j + nv].wrapping_add(carry as u64);
+            qhat - 1
+        } else {
+            qhat
+        };
+        if let Some(q) = q.as_deref_mut() {
+            q[j] = qj;
+        }
+    }
+
+    // D8: 剰余を元に戻す (正規化のずらしを戻す)。剰余 < 除数なので un[..nv] に収まる。
+    shr_assign(&mut un[..nv], s as u64);
+    un[nv..].fill(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,5 +690,144 @@ mod tests {
         assert!(sign_bit(&[0, 1], 65));
         assert!(!sign_bit(&[u64::MAX, 0], 65));
         assert!(!sign_bit(&[], 0));
+    }
+    /// mul_lo は u128 の乗算 (2^128 の剰余) と一致する (§11.4.3: 下位ビットだけを計算する)。
+    #[test]
+    fn mul_lo_matches_u128() {
+        let mut seed = 21;
+        for _ in 0..3000 {
+            let a = sample_u128(&mut seed);
+            let b = sample_u128(&mut seed);
+            let mut d = [!0u64; 2];
+            mul_lo(&mut d, &from_u128(a), &from_u128(b));
+            assert_eq!(to_u128(&d), a.wrapping_mul(b), "mul_lo {a:#x} {b:#x}");
+            // 1 ワード
+            let mut d1 = [!0u64; 1];
+            mul_lo(&mut d1, &[a as u64], &[b as u64]);
+            assert_eq!(d1[0], (a as u64).wrapping_mul(b as u64));
+        }
+        // 3 ワード: (2^192 - 1)^2 mod 2^192 = 1
+        let mut d = [0u64; 3];
+        mul_lo(&mut d, &[!0; 3], &[!0; 3]);
+        assert_eq!(d, [1, 0, 0]);
+        mul_lo(&mut [], &[], &[]);
+    }
+
+    /// u128 の除算と比べる divrem_in_place の補助。
+    fn check_divrem_u128(a: u128, b: u128) {
+        let mut un = [a as u64, (a >> 64) as u64, 0];
+        let mut vn = from_u128(b);
+        let mut q = [!0u64; 2];
+        divrem_in_place(&mut un, &mut vn, Some(&mut q));
+        assert_eq!(to_u128(&q), a / b, "q {a:#x} / {b:#x}");
+        assert_eq!(to_u128(&un[..2]), a % b, "r {a:#x} % {b:#x}");
+        assert_eq!(un[2], 0);
+        // 商を求めない版
+        let mut un = [a as u64, (a >> 64) as u64, 0];
+        let mut vn = from_u128(b);
+        divrem_in_place(&mut un, &mut vn, None);
+        assert_eq!(to_u128(&un[..2]), a % b);
+    }
+
+    /// Knuth D は u128 の除算と一致する (除数 1 ワード / 2 ワード、被除数 < 除数を含む)。
+    #[test]
+    fn divrem_in_place_matches_u128() {
+        let mut seed = 33;
+        for _ in 0..5000 {
+            let a = sample_u128(&mut seed);
+            let mut b = sample_u128(&mut seed);
+            if rng(&mut seed).is_multiple_of(3) {
+                b >>= rng(&mut seed) % 128;
+            }
+            if b == 0 {
+                b = 1 + (rng(&mut seed) as u128);
+            }
+            check_divrem_u128(a, b);
+        }
+        // 境界: 被除数 < 除数、等しい、除数 1、除数の最上位ビットが立っている / 立っていない。
+        for (a, b) in [
+            (5u128, 7u128),
+            (7, 7),
+            (u128::MAX, 1),
+            (u128::MAX, u128::MAX),
+            (u128::MAX, 1 << 64),
+            (u128::MAX, (1 << 64) + 1),
+            (u128::MAX - 1, u128::MAX),
+            (1 << 127, (1 << 64) | 1),
+            (0, 3),
+        ] {
+            check_divrem_u128(a, b);
+        }
+    }
+
+    /// Knuth D の補正 (D6 "add back") が起きる入力 (test-plan TC26)。q·v + r = u と r < v も確かめる。
+    #[test]
+    fn divrem_in_place_add_back() {
+        // u = 256'h7fff_ffff_ffff_ffff_8000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
+        // v = 256'h8000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0001
+        let u = [0u64, 0, 0x8000_0000_0000_0000, 0x7fff_ffff_ffff_ffff];
+        let v = [1u64, 0, 0x8000_0000_0000_0000, 0];
+        let mut un = [u[0], u[1], u[2], u[3], 0];
+        let mut vn = v;
+        let mut q = [0u64; 4];
+        divrem_in_place(&mut un, &mut vn, Some(&mut q));
+        assert_eq!(q, [0xffff_ffff_ffff_fffe, 0, 0, 0]);
+        assert_eq!(
+            &un[..4],
+            &[2, 0xffff_ffff_ffff_ffff, 0x7fff_ffff_ffff_ffff, 0]
+        );
+        let mut back = [0u64; 4];
+        mul_lo(&mut back, &q, &v);
+        assert!(!add_assign(&mut back, &un[..4]));
+        assert_eq!(back, u);
+        assert_eq!(cmp(&un[..4], &v), Ordering::Less);
+    }
+
+    /// 多ワードの乱数で q·v + r = u、r < v (性質、test-plan TC26)。
+    #[test]
+    fn divrem_in_place_property_multiword() {
+        let mut seed = 99;
+        for _ in 0..500 {
+            let n = 1 + (rng(&mut seed) % 6) as usize;
+            let mut u = [0u64; 6];
+            let mut v = [0u64; 6];
+            for w in u.iter_mut().take(n) {
+                *w = match rng(&mut seed) % 4 {
+                    0 => 0,
+                    1 => !0,
+                    _ => rng(&mut seed),
+                };
+            }
+            let nv = 1 + (rng(&mut seed) % n as u64) as usize;
+            for w in v.iter_mut().take(nv) {
+                *w = match rng(&mut seed) % 4 {
+                    0 => 0,
+                    1 => !0,
+                    2 => 1 << 63,
+                    _ => rng(&mut seed),
+                };
+            }
+            if is_zero(&v[..n]) {
+                v[0] = 1;
+            }
+            let (u, v) = (&u[..n], &v[..n]);
+            let mut un = [0u64; 7];
+            un[..n].copy_from_slice(u);
+            let mut vn = [0u64; 6];
+            vn[..n].copy_from_slice(v);
+            let mut q = [0u64; 6];
+            divrem_in_place(&mut un[..=n], &mut vn[..n], Some(&mut q[..n]));
+            assert_eq!(cmp(&un[..n], v), Ordering::Less, "r < v");
+            let mut back = [0u64; 6];
+            mul_lo(&mut back[..n], &q[..n], v);
+            assert!(!add_assign(&mut back[..n], &un[..n]));
+            assert_eq!(&back[..n], u, "q*v + r == u");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "division by zero")]
+    fn divrem_in_place_rejects_zero() {
+        divrem_in_place(&mut [1, 2, 0], &mut [0, 0], None);
     }
 }
