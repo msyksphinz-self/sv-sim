@@ -1,4 +1,4 @@
-# sv-sim 開発計画 (ドラフト v0.3)
+# sv-sim 開発計画 (ドラフト v0.4)
 
 Rust で一から書く SystemVerilog シミュレータ。
 
@@ -71,7 +71,7 @@ Rust で一から書く SystemVerilog シミュレータ。
 | `svsim-debug` | デバッグサーバ (問い合わせ API、因果追跡) |
 | `svsim-wave` | 波形ビューア連携 (waveview の wavesrv プロトコル、Surfer の WCP)、必要なら VCD/FST 出力 |
 | `svsim-mcp` | AI エージェント向け MCP サーバ |
-| `svsim-cli` | `svsim` コマンド (VCS/Xcelium 風のオプションもある程度受け付ける) |
+| `svsim-cli` | `svsim` コマンド。`svsim vcs` で VCS 互換のコマンドラインと `simv` フロー (§10.4) |
 | `xtask` / `corpus` | テストコーパスの取得・実行・比較 |
 
 ---
@@ -126,6 +126,25 @@ Rust で一から書く SystemVerilog シミュレータ。
 - **チェックポイントとの関係** (§8): C 側の状態はアリーナ外にあるので、DPI を使う設計では
   fork ベースのスナップショット、または DPI 呼び出しの記録/再生で対応する。
 - VPI (`vpi_user.h`) も同じ crate で提供する (cocotb 等を動かす目的)。
+
+### 6.1 業務 SoC での想定利用パターンと対応
+業務 SoC では DPI を **擬似メモリアクセス、機能呼び出し、UART の模擬** に使っている。それぞれへの対応方針は次のとおり。
+
+| 用途 | 想定される形 | sv-sim 側の対応 |
+|---|---|---|
+| 擬似メモリ | C 側に巨大で疎なメモリを持ち、バス I/F のモデルが毎トランザクション `import "DPI-C" function` で read/write する。ELF のロードやバックドアアクセスもある | **呼び出し頻度が高い**ので、JIT コードから C 関数を直接呼ぶ最短経路にする (引数の変換なし、`svLogicVecVal` をそのまま渡す)。DPI 呼び出しのオーバーヘッドを単体ベンチマークで計測し、VCS 以下を目標にする |
+| 機能呼び出し | C のモデルやライブラリ (チェッカ、リファレンスモデル、ログ) を呼ぶ。C から SV の export function/task を呼び返すこともある | export function は M3 で、時間を消費する export task は M7 で対応する。`svGetScope`/`svSetScope` を正しく実装する |
+| UART 模擬 | SV 側から送信バイトを C に渡して端末/ファイル/ソケットに出す。受信側は C からポーリングして入力を受け取る | ホスト OS への副作用があるので、**再実行 (§8) では C を呼ばず記録した戻り値を再生**し、出力を二重に送らないようにする。対話入力 (ソケット等) は記録されたものだけを再生する |
+
+- **再実行との関係**: 擬似メモリは呼び出し回数が多いので、全呼び出しの記録はログが大きくなる。
+  そこで、`--dpi-replay=record` (戻り値を全記録。圧縮あり) と `--dpi-replay=fork` (fork でプロセスごと
+  スナップショットし、C 側のメモリ状態も含めて復元する) を選べるようにする。擬似メモリのように C 側の状態が大きい場合は fork 方式が有利。
+- **スレッド**: 業務の C モデルはスレッド安全を前提にしていないはずなので、DPI を呼ぶプロセスは
+  テストベンチ側の 1 パーティションに置き、DUT 側だけを並列化する (§7.3)。
+  バス I/F のモデルが DUT 側のパーティションにある場合は、そのパーティション専用のスレッドで DPI を呼ぶ。
+  同じ C モデルを複数スレッドから呼ぶ場合だけ直列化のロックをかける。
+- **C ソースのビルド**: VCS と同様に、コマンドラインに `.c`/`.cpp` を並べればコンパイルしてリンクする。
+  `-CFLAGS`/`-LDFLAGS`/`-sv_lib` に対応する (§10.4)。
 
 ## 7. マルチコア並列
 
@@ -286,6 +305,28 @@ Rust で一から書く SystemVerilog シミュレータ。
     sv-sim 側には暗号化ブロックを一覧表示するコマンドを用意する。
 - 社外に出せないコードでも回せるよう、コーパスマネージャはローカルのプライベートなマニフェストも扱えるようにする。
 
+### 10.4 VCS 互換 (業務での現行ツールが Synopsys VCS のため)
+既存の VCS 用スクリプト・filelist・テストベンチを、**ほぼそのまま流せる**ことを目標にする。
+
+- **2 段階フロー**: `svsim vcs <VCSと同じ引数>` でコンパイルし、`simv` 相当の実行ファイル (またはラッパスクリプト) を出力する。
+  `./simv +plusargs` で実行できるようにし、既存の Makefile の変更を最小にする。
+- **コンパイルオプション** (優先度順):
+  `-sverilog`、`-f`/`-F`、`+incdir+`、`+define+`、`-y`/`-v`/`+libext+`、`-top`、`-timescale=`、`-override_timescale`、
+  `-l`、`-o`、`-full64`、`-CFLAGS`/`-LDFLAGS`/`-sv_lib`、`.c/.cpp` ファイル、`-ntb_opts uvm`、`+lint=`、`-assert`。
+  意味のないオプション (`-debug_access+all`、`-kdb`、`-lca` 等) は警告付きで受け流す。
+- **実行時オプション**: `+ntb_random_seed=`、`+UVM_TESTNAME=` など任意の `+plusargs` (`$test$plusargs`/`$value$plusargs`)、`-l`。
+- **VCS/Verdi 固有のシステムタスク**: `$fsdbDumpfile`/`$fsdbDumpvars`/`$fsdbDumpon/off`/`$vcdpluson` などは
+  テストベンチに埋まっていることが多い。デフォルトでは **無害な no-op** にする (sv-sim は波形レスなので)。
+  オプションで「その指定範囲を常時記録対象にする」と解釈し、ダンプ指定を §8.2 の記録範囲のヒントとして使う。
+- **乱数**: `$urandom`/`randomize` の系列を VCS と一致させるのは不可能 (非公開アルゴリズム) なので、
+  seed を指定したときの再現性だけを保証する。VCS と差分比較するテストは、乱数に依存しない出力で比べる。
+- **寛容モード**: VCS が通す規格外の書き方 (暗黙の型変換、宣言順の緩さなど) を `--compat=vcs` で受け付ける。
+  コーパスで見つかったものから追加する。
+- **UCLI**: `-ucli -do script.tcl` の基本コマンド (`run`、`force`、`release`、`dump` 等) はよく使われるものだけ対応し、
+  残りは §8 のデバッグ API に誘導する。
+- **差分検証**: 業務環境には VCS があるので、プライベートマニフェストで「VCS のログ」と「sv-sim のログ」を
+  自動比較するモードを用意する (時刻付きの `$display`、UVM のレポート集計、終了ステータス)。
+
 ## 11. マイルストーン
 
 | M | 内容 | 完了条件 |
@@ -293,14 +334,14 @@ Rust で一から書く SystemVerilog シミュレータ。
 | **M0** 基盤 | workspace、`svsim-logic`、診断、アリーナ型状態管理、CI、コーパスマネージャの雛形 | logic の差分テスト合格、sv-tests のパース段階を計測開始 |
 | **M1** Verilog コア | プリプロセッサ、Verilog-2005 主要構文、イベントキュー、インタプリタ、`$display` 等 | 簡単な設計で Icarus と出力一致 |
 | **M2** ネットと inout | 多重ドライバ、強度、全ネット種別、`tran`、generate、parameter、function/task | open-drain バス等の inout テストに合格、ivtest の該当部分に合格 |
-| **M3** SV 設計記述 + DPI 基本 | `logic`、`always_*`、struct/enum/union、packed/unpacked 配列、package、interface/modport、**DPI-C import** | ibex / picorv32 等が動く |
+| **M3** SV 設計記述 + DPI 基本 | `logic`、`always_*`、struct/enum/union、packed/unpacked 配列、package、interface/modport、**DPI-C import** | ibex / picorv32 等が動く。擬似メモリ相当の DPI モデルで CPU がプログラムを実行できる |
 | **M4** 波形レスデバッグ v1 | チェックポイント、再実行、問い合わせ API、CLI、MCP、**waveview (wavesrv)** 連携、Surfer (WCP) 連携 | 失敗テストに対し、ダンプなしで waveview から任意の信号を表示できる |
 | **M5** 単一スレッド高速化 | MIR 最適化、静的スケジューリング、2 値推論、Cranelift JIT | Icarus 比 ≫ 10 倍 |
 | **M6** マルチコア | パーティション並列 (ルックアヘッド同期)、自動分割 + ユーザ指定、評価並列 | 複数サブシステム構成の SoC (例: OpenTitan) でコア数に応じてスケール、出力はシングルスレッドと完全一致 |
 | **M7** 検証言語 | class、動的配列/キュー/連想配列、fork/join、mailbox/semaphore、clocking、program、**DPI-C 完全版** (export、時間消費 task) | クラスベースのテストベンチが動く |
 | **M8** randomize / coverage / SVA | 制約ソルバ、covergroup、SVA。デバッグ API に `assertion_trace` を追加 | 該当する sv-tests に合格 |
 | **M9** UVM / VPI | UVM (1800.2) を無改造で実行、VPI (cocotb) | OpenTitan DV の一部が動作 |
-| **M10** 業務 SoC | 互換オプション、インクリメンタルコンパイル、大規模対応のチューニング | 業務 SoC の実テストが通る |
+| **M10** 業務 SoC | VCS 互換の仕上げ、インクリメンタルコンパイル、大規模対応のチューニング | 業務 SoC の実テストが VCS と同じ結果で通る |
 
 M4 (デバッグ) を高速化より前に置いているのは、状態管理の設計が JIT と並列化の両方に効くため。
 デバッグ基盤を先に作ると、後続の開発 (コーパスでの失敗調査) 自体も速くなる。
@@ -324,8 +365,10 @@ M4 (デバッグ) を高速化より前に置いているのは、状態管理�
 - ゲートレベル: 対象外。
 - 暗号化 IP: ブラックボックス化 + 代替モデル差し込みで対応 (§10.3)。
 
+- 業務 SoC の DPI 用途: 擬似メモリアクセス、機能呼び出し、UART 模擬 (§6.1)。
+- 現行ツール: Synopsys VCS。互換の対象は VCS を最優先にする (§10.4)。
+
 ## 14. 未決事項
-1. **業務 SoC での DPI の使い方** (C モデル、時間を消費する export の有無)。DPI-C 完全版の優先度を決めるため。
-2. **現在使っている商用シミュレータ** (オプション互換の優先順位を決めるため)。
-3. **waveview のプロトコル拡張** (`drivers`/`loads`/`why`/`src`) の仕様。両方のリポジトリで合わせて決める。
-4. AI 連携は MCP 経由で外部エージェントから使う形で進める (内蔵 LLM 呼び出しは当面なし)。
+1. **waveview のプロトコル拡張** (`drivers`/`loads`/`why`/`src`) の仕様。両方のリポジトリで合わせて決める。
+2. AI 連携は MCP 経由で外部エージェントから使う形で進める (内蔵 LLM 呼び出しは当面なし)。
+3. (分かれば) 業務の DPI で、C から SV を呼び返す export task が時間を消費するか。M7 の優先度に影響する。
