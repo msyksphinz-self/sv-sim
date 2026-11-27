@@ -14,7 +14,7 @@
 | M0-T10 | ソースマップ・診断 (波2) | implementer | done |
 | M0-T12 | コーパスマネージャ雛形 (波2) | implementer | done |
 | M0-T3b | words/abi/diff_core/no_alloc_core + レビュー minor (波3) | implementer | done |
-| M0-T4 | ビット演算・リダクション・論理・比較・?:・エッジ (波3) | implementer | doing |
+| M0-T4 | ビット演算・リダクション・論理・比較・?:・エッジ (波3) | implementer | done |
 | M0-T6 | シフト・幅変更・連結・選択・$clog2 (波3) | implementer | done |
 | M0-T2 + T12fix | CI・deny.toml + コーパスのレビュー修正 (波3) | implementer | done |
 | M0-T5/T7/T8/T13 | 波4 | implementer | todo |
@@ -54,3 +54,5 @@
 | 2026-11-27 | T3b 残件 | view.rs の panic メッセージに関数名を入れる (TC57) は波4で小修正タスクとして実施。words.rs の allow(dead_code) は M0 完了時に外す。公開カーネル同士の Scratch 入れ子は避け、内部はスライスを渡す (T5 へ伝達) | マネージャ |
 | 2026-11-27 | 命名規約 (2値) | 2値版は名前の末尾に `2` (`shl2`, `shl_const_assign2`, `clog2_2`)、層1は `<name>2_l64`、2値×4値の混在は `_bits` (カーネル) / `_logic` (BitVec メソッド)。T6 の命名を規約として採用 | マネージャ |
 | 2026-11-27 | ビット補助の統合 | shift.rs の pub(crate) ビット補助 (read_bits 等) は波4の小修正タスクで words.rs に移す | マネージャ |
+| 2026-11-27 | 層3 の eq/ne/not | PartialEq::eq を隠す固有メソッドは紛らわしいので、LogicVec/BitVec の固有 eq/ne は `logic_eq`/`logic_ne` に改名、not は std::ops::Not を実装。波4の整理タスクで実施 | マネージャ |
+| 2026-11-27 | 整理タスク M0-T14 (波4) | 上記改名、ビット補助の words.rs への移動、view.rs の panic メッセージに関数名、テストのローカル比較補助を tests/common に寄せる | マネージャ |
