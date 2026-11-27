@@ -1,14 +1,20 @@
 # M0「基盤」テスト計画 (M0-TP)
 
 - 作成: テスト計画エージェント (test-planner)、2026-11-27
-- 入力: `CLAUDE.md`、`docs/PLAN.md` v0.4、`docs/milestones/M0/plan.md` v2、`docs/milestones/M0/plan-review.md`、`docs/STATUS.md` (決定事項ログ)
-- 状態: v1 (ドキュメントのみ。テストコードは各実装タスクと、マネージャの指示があれば後でテスト計画エージェントが書く)
+- 入力: `CLAUDE.md`、`docs/PLAN.md` v0.4、`docs/milestones/M0/plan.md` v2.1 (§11 VCS 確認リスト V-1〜V-18、§12 Q-1〜Q-22 の回答)、`docs/milestones/M0/plan-review.md`、`docs/STATUS.md` (決定事項ログ)
+- 状態: v2 (ドキュメントのみ。テストコードは各実装タスクと、マネージャの指示があれば後でテスト計画エージェントが書く)
+
+## 改訂履歴
+| 版 | 日付 | 内容 |
+|---|---|---|
+| v1 | 2026-11-27 | 初版。未確定事項 Q-1〜Q-22 を §8 に列挙 |
+| v2 | 2026-11-27 | plan.md v2.1 §12 と STATUS の決定に従い Q-1〜Q-22 を解消し、各 TC の期待値を確定 (§8 は回答の反映先の一覧に変更)。§7 を V-1〜V-18 に合わせた (V-15〜V-18 を追加)。TC64 は承認済みの T10 の書式 (rustc 風) でゴールデンを固定。STATUS の決定 (ops の命名、proptest 回帰ファイルの置き場所、file:// URL の拒否) を反映 |
 
 > **方針**
-> 1. 期待値は**計画 (plan.md v2) と IEEE 1800 の意味論から導いた**。実装のコードは見ていない (着手時点で `tests/` は無く、`crates/` は T1 の骨組みだけ)。
+> 1. 期待値は**計画 (plan.md v2.1) と IEEE 1800 の意味論から導いた**。svsim-logic と svsim-corpus の実装のコードは見ていない。例外は svsim-common の診断表示で、マネージャの指示により、承認済みの T10 の書式 (`crates/svsim-common/tests/diag_render.rs` の出力) を仕様として読んだ (TC63, TC64)。
 > 2. 規格本文はこの環境から参照できない。条番号の確度は plan.md 冒頭の注記と plan-review.md §1.1 に従う。**表番号は書かない**。
 > 3. 規格の確度が低いもの、規格が規定していないもの、他実装で分かれるものは「**暫定期待値 [V-n]**」と書き、plan.md §11 の VCS 確認リストと紐付けた (§7 に一覧)。VCS の結果が出たら、その期待値だけを差し替える。
-> 4. 計画に書かれていない細部 (エラーにするか panic にするか、等) は期待値を**作らず**、§8 の「未確定事項」に挙げた。実装が勝手に決めた挙動にテストを合わせないため、マネージャの判断を待つ。
+> 4. 計画に書かれていない細部 (エラーにするか panic にするか、等) は v1 では期待値を作らず、§8 に質問として挙げた。v2 では plan.md v2.1 §12 の回答 (マネージャが採用を決定) に従って期待値を確定した。回答のうち Q-11・Q-12・Q-13・Q-14 と TC64 の表示書式は、マネージャが T10 の実装済みの挙動を仕様として承認したもの。
 > 5. 数値の期待値のうち手計算が面倒なもの (多倍長の剰余、FNV-1a ハッシュ、浮動小数の丸め) は、Python の任意精度整数と `struct` で計算して確かめた (実装とは無関係の検算)。
 
 ---
@@ -37,6 +43,7 @@
 
 **トレーサビリティの規約** (実装タスクへの依頼)
 - テスト関数名に TC ID を小文字で入れる (例: `tc13_and_table_11_4_8`)。1 つの TC を複数の関数で実装してよい。
+- 本文の関数名 (`and`、`shl` 等) は plan §3.5 の名前。実際のパスは STATUS の決定により `ops::<分野>::<名前>` (例: `ops::bitwise::and`)、同じファイル内の層 1 のスカラ版は接尾辞 `_l64` (例: `ops::bitwise::and_l64`)。`ops` の glob 再エクスポートは無い。
 - ゴールデンテストのコメントに条番号 (例: `// IEEE 1800-2023 §11.4.8`) を書き、表番号は書かない。暫定期待値には `// [要VCS確認 V-n] 暫定` と書く。
 
 ---
@@ -238,9 +245,12 @@
   | `from_u64(128, 0xdead)` | 下位 16 ビットが `dead`、bit 16..127 は 0 |
   | `from_i64(4, -1)` / `from_i64(4, 8)` / `from_i64(65, -1)` / `from_i64(63, -1)` | `4'b1111` / `4'b1000` / 65 ビット全 1 (bit 64 も 1) / 63 ビット全 1 (bit 63 以上は 0: CR-2) |
   | `zero(w)`, `filled(w, X)`, `filled(w, Z)` (w = 1, 64, 65, 129) | 全 0 / 全 x / 全 z。正規化されている |
-  | `from_bits_str("10xz_01")` | 幅 6、`10xz01` |
-  | `from_bits_str` → `to_bits_string` | `'_'` を除き小文字で元に戻る (P: 任意の 0/1/x/z 列、幅 1〜1024) |
-  | `from_bits_str("102")` | `Err` |
+  | `from_bits_str("10xz01")` | 幅 6、`10xz01` |
+  | `from_bits_str("10XZ01")` | 幅 6、`10xz01` (大文字を受ける。Q-22) |
+  | `from_bits_str("")` | `Ok`、幅 0 (Q-22) |
+  | `from_bits_str("10xz_01")`、`"102"`、`"1 0"`、`"?"` | `Err` (`_` も含め 0/1/x/X/z/Z 以外はエラー。Q-22) |
+  | `from_bits_str` → `to_bits_string` | 小文字にした元の文字列に戻る (P: 任意の 0/1/x/X/z/Z 列、幅 0〜1024) |
+  | `RefVec::from_bits_str` | 上の 4 行と同じ結果 (参照モデルとの受け渡しの前提。TC60) |
   | `to_u64()`: 65 ビットで bit 64=0・下位=5 / bit 64=1 / X を含む | `Some(5)` / `None` / `None` |
   | `to_i64(true)` / `to_i64(false)` for `8'hff` | `Some(-1)` / `Some(255)` |
   | `to_i64(true)` for 65 ビット全 1 | `Some(-1)` |
@@ -255,8 +265,8 @@
 #### M0-TC11 ビュー (`LogicRef` / `LogicMut` / `BitRef` / `BitMut`)
 - 目的: 層 2 のビューの基本。
 - 入力と期待結果:
-  - `from_planar(65, &[a0, a1, b0, b1])` の `aval() == [a0,a1]`、`bval() == [b0,b1]`。長さが `2*words_for(w)` でなければ panic/Err (どちらかは §8 Q-1)。
-  - `bit(i)` / `set_bit(i, v)`: w = 129 で i = 0, 63, 64, 127, 128 に 0/1/x/z を書いて読み戻すと同じ。他のビットは変わらない。
+  - `from_planar(65, &[a0, a1, b0, b1])` の `aval() == [a0,a1]`、`bval() == [b0,b1]`。長さが `2*words_for(w)` でなければ **panic** (release でも。Q-1)。長さ 3 と 5 で `#[should_panic]`。
+  - `bit(i)` / `set_bit(i, v)`: w = 129 で i = 0, 63, 64, 127, 128 に 0/1/x/z を書いて読み戻すと同じ。他のビットは変わらない。i = 129 (範囲外) は `bit` も `set_bit` も **panic** (Q-1)。
   - `fill(X)` (w = 65) → 全 x、bit 65 以上は 0 (CR-2)。
   - `has_unknown()`: 全 0 → false、bit 128 だけ z → true。
   - `copy_from`: 幅が違うと assert で panic。
@@ -322,7 +332,7 @@
   | 129 ビット全 1 で bit 128 だけ 0 | 0 | 1 | 1 | 0 | 0 | 1 |
   | 129 ビット全 1 で bit 128 だけ x | x | x | 1 | 0 | x | x |
   | 129 ビット全 0 で bit 128 だけ 1 | 0 | 1 | 1 | 0 | 1 | 0 |
-- `$countbits` 系 (入力 `8'b10xz_01xz`): `count_bits({1})` = 2、`{0}` = 2、`{x}` = 2、`{z}` = 2、`{x,z}` = 4、`{0,1,x,z}` = 8、空集合 = 0 (§8 Q-2)。`count_ones` = 2。
+- `$countbits` 系 (入力 `8'b10xz_01xz`): `count_bits({1})` = 2、`{0}` = 2、`{x}` = 2、`{z}` = 2、`{x,z}` = 4、`{0,1,x,z}` = 8、空集合 = 0 (Q-2)。`count_ones` = 2。
 - `$onehot`: `8'b0001_0000` → 1、`0` → 0、`8'b0001_0001` → 0、`8'b0001_x000` → 1 (定義 `$countbits(e,'1)==1` から)。`$onehot0`: `0` → 1、`8'b0000_0001` → 1、`8'b0000_0011` → 0。`$isunknown`: `8'b0000_000z` → 1、`8'h00` → 0。幅 129 の bit 128 だけ 1 → `onehot` 1。
 - 根拠: §11.4.9, §20.9、plan §3.5(a)。
 - 実行: `--test golden_bitwise` / 自動。
@@ -359,7 +369,7 @@
   | `4'bxxxx` | `4'bxxxx` | x | x | 1 | 0 |
   | 129 ビット: 同値で bit 128 だけ異なる (0/1) | | 0 | 1 | 0 | 1 |
   | 129 ビット: 同値で bit 128 が x、他の既知ビットで 1 か所不一致 | | 0 | 1 | 0 | 1 |
-- 根拠: §11.4.5、plan §3.5(b) (plan-review: 「既知ビットの不一致で 0」は未検証だが主要実装と一致)。
+- 根拠: §11.4.5、plan §3.5(b) (plan-review: 「既知ビットの不一致で 0」は未検証だが主要実装と一致)。`4'b1x00 == 4'b0x00` → 0 と `4'b1x00 == 4'b1000` → x の 2 行は **[V-15 暫定]**。
 - 実行: `--test diff_compare` 内の golden または `golden_bitwise` / 自動。
 
 #### M0-TC17 ワイルドカード等価 (§11.4.6)
@@ -374,7 +384,7 @@
   | `4'b1z10` | `4'b1010` | x | x |
   | `4'b1x1z` | `4'b1010` | x (左右を入れ替えると対称でない) | x |
   | `4'b0000` | `4'bxxxx` | 1 | 0 |
-- 根拠: §11.4.6 (未検証)、plan §3.5(b)。
+- 根拠: §11.4.6 (未検証)、plan §3.5(b)。表全体が **[V-16 暫定]**。
 - 実行: 同上 / 自動。
 
 #### M0-TC18 casez / casex の照合 (§12.5.1)
@@ -388,7 +398,7 @@
   | `4'b0000` | `4'bzzzz` | true | true |
   | `4'b0000` | `4'bxxxx` | false | true |
   | `4'b1100` | `4'b1100` | true | true |
-- 根拠: §12.5.1 (未検証)、plan §3.5(b)。
+- 根拠: §12.5.1 (未検証)、plan §3.5(b)。表全体が **[V-17 暫定]**。
 - 実行: 同上 / 自動。
 
 #### M0-TC19 関係演算 (§11.4.4, §11.8.1)
@@ -701,10 +711,14 @@
   | `(8, U, Hex, "XZ")`、`(8, U, Hex, "xz")` | `8'bxxxx_zzzz` (大文字小文字を区別しない) | |
   | `(8, U, Hex, "AB")` / `"ab"` | `8'hab` | |
   | `(8, U, Bin, "1_0_1")` | `8'b0000_0101` | |
-  | `(4, U, Bin, "1_0101")` | `4'b0101` | truncated=true |
-  | `(4, U, Hex, "fff")` | `4'hf` | truncated=true |
+  | `(4, U, Bin, "1_0101")` | `4'b0101` | truncated=true (1 が落ちた) |
+  | `(4, U, Hex, "fff")` / `"ff"` | `4'hf` | truncated=true |
   | `(3, U, Oct, "7")` | `3'b111` | |
-  | `(4, U, Oct, "17")` | `4'b1111` | truncated: §8 Q-3 |
+  | `(4, U, Oct, "17")` | `4'b1111` | truncated=**false** (落ちるのは 0 の 2 ビットだけ。Q-3) **[V-18 暫定]** |
+  | `(8, U, Hex, "0ff")` | `8'hff` | truncated=**false** **[V-18 暫定]** |
+  | `(4, U, Bin, "0000_1111")` | `4'b1111` | truncated=false **[V-18]** |
+  | `(4, U, Hex, "xx")` / `"z0"` | `4'bxxxx` / `4'b0000` | truncated=true (x/z が落ちた。Q-3) **[V-18]** |
+  | `(4, U, Hex, "1f")` | `4'hf` | truncated=true **[V-18]** |
   | `(2, U, Bin, "??")` | `2'bzz` | |
   | `(65, U, Hex, "1_0000_0000_0000_0000")` | bit 64 だけ 1 | |
   | `(4, S, Bin, "1")` | `4'b0001`、signed=true (リテラル段階では 0 で埋める) | |
@@ -714,7 +728,7 @@
   | `(None, U, Hex, "1_0000_0000")` | 幅 33 (bit 32 = 1)、`widened_unsized=true` **[V-11 暫定]** | |
   | `(Some(0), ...)` | `Err` | |
   | `(8, U, Bin, "102")`、`(8, U, Oct, "8")`、`(8, U, Hex, "g")` | `Err` (基数に無い数字) | |
-- 根拠: §5.7.1、plan §3.5(g)、R-11。
+- 根拠: §5.7.1、plan §3.5(g)、R-11、決定 Q-3。
 - 実行: `--test golden_literal` / 自動。
 
 #### M0-TC38 10 進リテラル・サイズなし整数
@@ -769,7 +783,7 @@
   | atoi | `"123"` / `"12_3"` / `"12a3"` | 123 / 123 / 12 |
   | atoi | `""` / `"abc"` | 0 / 0 |
   | atoi | `"-12"` / `"+5"` / `" 12"` | 0 / 0 / 0 **[V-6 暫定。Verilator は -12 / 5 / 12]** |
-  | atoi | `"_12"` | 12 (`_` を読み飛ばす。§8 Q-4) |
+  | atoi | `"_12"` / `"_"` / `"__"` / `"1__2"` | 12 / 0 / 0 / 12 (`_` を読み飛ばす。数字が無ければ 0。Q-4) **[V-6 暫定]** |
   | atoi | `"4294967295"` / `"4294967296"` / `"4294967297"` | `32'hffff_ffff` / 0 / 1 (超えた分は切り詰め) **[V-6 暫定]** |
   | atohex | `"ff"` / `"FF"` / `"1g"` | 255 / 255 / 1 |
   | atohex | `"0xff"` | 0 (`0` を読み、`x` で止まる) **[V-6 暫定]** |
@@ -787,42 +801,57 @@
   | `to_f64(2^53 + 1, U)` | 2^53 (同距離 → 仮数が偶数) |
   | `to_f64(2^53 + 3, U)` | 2^53 + 4 |
   | `to_f64(128 ビット 2^100, U)` | 2^100 (正確) |
-  | `to_f64(1024 ビット全 1, U)` | +∞ (2^1024 に丸まり、IEEE 754 の RNE でオーバフロー) §8 Q-5 |
+  | `to_f64(1024 ビット全 1, U)` | +∞ (2^1024 に丸まり、IEEE 754 の RNE でオーバフロー。最大値に飽和させない。Q-5) |
+  | `to_f64(1025 ビット: 2^1024 のビットだけ 1, S)` | −∞ (−2^1024。Q-5) |
+  | `to_f64(1024 ビット: 2^1024 − 2^971, U)` | `f64::MAX` (正確に表せる) |
+  | `to_f64(1024 ビット: 2^1024 − 2^970, U)` | +∞ (f64::MAX と 2^1024 のちょうど中間 → 仮数が偶数の 2^1024 → 溢れ。Q-5) |
+  | `to_f64(1024 ビット: 2^1024 − 2^970 − 1, U)` | `f64::MAX` |
   | `to_f64(1024 ビット全 1, S)` | −1.0 |
   | `to_f64(8'b1x01, U)` / `to_f64(4'b1x01, S)` | 9.0 / −7.0 (x を 0 として扱う) **[V-14 暫定]** |
   | `to_f64(8'bzzzz_zzzz, U)` | 0.0 **[V-14]** |
   | `to_f32(2^24 + 1, U)` | 16777216.0 |
   | `to_f32(2^54 + 2^30 + 1, U)` | 2^54 + 2^31 = 18014400656965632.0 (**二重丸めなら 2^54 になる**。R-12) |
   | `to_f32(64'h8000_0000_0000_0000, S)` | −2^63 |
+  | `to_f32(128 ビット: 2^128 − 2^104, U)` | `f32::MAX` |
+  | `to_f32(128 ビット: 2^128 − 2^104 + 2^103 − 1, U)` | `f32::MAX` |
+  | `to_f32(128 ビット: 2^128 − 2^104 + 2^103, U)` | +∞ (中間 → 偶数側の 2^128 → 溢れ。Q-5) |
+  | `to_f32(129 ビット: 2^128, U)` | +∞ |
 - 根拠: §6.12.1、§20.5、plan §3.5(i)、R-12。
 - 実行: `--test diff_real_fmt` の golden 部 / 自動。
 
 #### M0-TC43 実数 → 整数と bits 変換 (§6.12.1, §20.5)
-  | 呼び出し (dst の幅) | 期待 |
-  |---|---|
-  | `from_f64_round(32, 35.5)` / `35.4` | 36 / 35 |
-  | `from_f64_round(32, -1.5)` / `-2.5` / `2.5` / `0.5` / `-0.5` | −2 / −3 / 3 / 1 / −1 (0 から遠い方へ。偶数丸めではない) |
-  | `from_f64_round(32, 0.49999999999999994)` | 0 (`floor(x+0.5)` だと 1 になる落とし穴) |
-  | `from_f64_round(32, 1.4999999999999998)` | 1 |
-  | `from_f64_round(32, -0.0)` / `5e-324` | 0 / 0 |
-  | `from_f64_round(64, 4503599627370495.5)` | 4503599627370496 |
-  | `from_f64_round(8, -1.0)` / `300.0` | `8'hff` / 44 (2 の補数で切り詰め) |
-  | `from_f64_round(64, 1e20)` | 7766279631452241920 (1e20 mod 2^64) |
-  | `from_f64_round(128, 1e20)` | 100000000000000000000 (正確) |
-  | `from_f64_round(128, 2^100)` / `-2^100` | 2^100 / 2^128 − 2^100 |
-  | `from_f64_round(1100, 1e300)` | 1e300 の正確な整数値 (997 ビット) |
-  | `from_f64_round(32, NaN)` / `+∞` / `−∞` | 0 と `RealToIntStatus::NotFinite` **[V-4 暫定]** |
-  | `from_f64_trunc(32, 35.9)` / `-35.9` / `-0.5` | 35 / −35 / 0 |
-  | `from_f64_trunc(32, NaN)` | 0、NotFinite **[V-4 暫定]** |
+- `RealToIntStatus` は 4 種 (Q-6): `Exact` (整数で dst に収まった)、`Rounded` (小数部を丸めたが収まった)、`Wrapped` (丸めた後の整数が dst の符号付きの範囲にも符号なしの範囲にも収まらず、2 の補数で切り詰めた。丸めの有無によらない)、`NotFinite` (NaN/±∞、0 を返す)。幅 w の dst に「収まる」とは、整数 n が −2^(w−1) ≤ n ≤ 2^w − 1 であること。
+  | 呼び出し (dst の幅) | 値 | 状態 |
+  |---|---|---|
+  | `from_f64_round(32, 35.5)` / `35.4` / `36.0` | 36 / 35 / 36 | Rounded / Rounded / Exact |
+  | `from_f64_round(32, -1.5)` / `-2.5` / `2.5` / `0.5` / `-0.5` | −2 / −3 / 3 / 1 / −1 (0 から遠い方へ。偶数丸めではない) | Rounded |
+  | `from_f64_round(32, 0.49999999999999994)` | 0 (`floor(x+0.5)` だと 1 になる落とし穴) | Rounded |
+  | `from_f64_round(32, 1.4999999999999998)` | 1 | Rounded |
+  | `from_f64_round(32, -0.0)` / `5e-324` | 0 / 0 | Exact / Rounded |
+  | `from_f64_round(64, 4503599627370495.5)` | 4503599627370496 | Rounded |
+  | `from_f64_round(8, -1.0)` | `8'hff` | Exact (符号付きの範囲に収まる) |
+  | `from_f64_round(8, 255.0)` / `-128.0` | `8'hff` / `8'h80` | Exact (符号なし / 符号付きの範囲) |
+  | `from_f64_round(8, 254.6)` | `8'hff` | Rounded |
+  | `from_f64_round(8, 255.5)` | `8'h00` (256 を切り詰め) | Wrapped |
+  | `from_f64_round(8, 300.0)` / `-129.0` | 44 / `8'h7f` (2 の補数で切り詰め) | Wrapped / Wrapped |
+  | `from_f64_round(64, 1e20)` | 7766279631452241920 (1e20 mod 2^64) | Wrapped |
+  | `from_f64_round(128, 1e20)` | 100000000000000000000 (正確) | Exact |
+  | `from_f64_round(128, 2^100)` / `-2^100` | 2^100 / 2^128 − 2^100 | Exact / Exact |
+  | `from_f64_round(1100, 1e300)` | 1e300 の正確な整数値 (997 ビット) | Exact |
+  | `from_f64_round(32, NaN)` / `+∞` / `−∞` | 0 | NotFinite **[V-4 暫定]** |
+  | `from_f64_trunc(32, 35.9)` / `-35.9` / `-0.5` / `7.0` | 35 / −35 / 0 / 7 | Rounded / Rounded / Rounded / Exact (小数部を捨てたものは Rounded) |
+  | `from_f64_trunc(8, 256.7)` | `8'h00` | Wrapped |
+  | `from_f64_trunc(32, NaN)` | 0 | NotFinite **[V-4 暫定]** |
   | `$realtobits(1.0)` / `$bitstoreal(64'h3ff0_0000_0000_0000)` | `64'h3ff0_0000_0000_0000` / 1.0 |
   | `$shortrealtobits(1.0)` / 逆 | `32'h3f80_0000` / 1.0 |
   | `$realtobits(-0.0)` / NaN のビットパターン | `64'h8000_0000_0000_0000` / 入力の NaN のビットをそのまま保つ |
-- 有限で正常な変換のときの `RealToIntStatus` の値は §8 Q-6。
+- 注意 (STATUS の決定): 参照モデルの状態は現在 2 種なので、T8 の着手時に参照モデルも 4 種に合わせる。それまで TC44 の状態の比較は保留し、上の固定値 (TC43) でだけ検査する。
 - 実行: `--test diff_real_fmt` / 自動。
 
 #### M0-TC44 実数の差分テスト
 - 入力 (D): 幅 1〜1024 の整数 (S/U、X/Z を少し混ぜる) と、f64 のビットパターンの一様乱数 (非正規化数、±0、±∞、NaN、2 の冪 ± 0.5 を多めに)。
-- 期待: `to_f64 to_f32 from_f64_round from_f64_trunc` が参照モデルとビット単位で一致 (浮動小数は `to_bits` で比較。NaN は「どちらも NaN」)。
+- 期待: `to_f64 to_f32 from_f64_round from_f64_trunc` が参照モデルとビット単位で一致 (浮動小数は `to_bits` で比較。NaN は「どちらも NaN」)。`RealToIntStatus` も一致 (参照モデルが 4 種に揃った後。TC43 の注意)。
+- 性質 (P、状態): 返した状態が定義と矛盾しない。`Exact` ⇔ v が整数で範囲内、`Wrapped` ⇔ 丸めた整数が範囲外。
 - 性質 (P): 有限の f64 v と十分広い dst (1100 ビット) で、`to_f64(from_f64_trunc(v), S) == v.trunc()`。|n| ≤ 2^53 の整数 n で `to_f64(n) as i64 == n`。
 - 実行: `--test diff_real_fmt` / 自動。
 
@@ -889,13 +918,18 @@
   | `Min{0}` | `%0b` / `%0o` | `8'h05` / 0 | `101` / `0` |
   | `Min{5, false}` | `%5d` | 42 / −5 (S) | `␣␣␣42` / `␣␣␣-5` |
   | `Min{5, true}` | `%05d` | 42 | `00042` |
-  | `Min{5, true}` | `%05d` | −5 (S) | `-0005` (符号の後に 0。§8 Q-7) |
+  | `Min{5, true}` | `%05d` | −5 (S) | `-0005` (符号を先頭に置き、その後を 0 で埋める。Q-7) |
   | `Min{5, false}` | `%5d` | `8'bx` | `␣␣␣␣x` |
+  | `Min{5, true}` | `%05d` | `8'bx` | `0000x` (Q-7) |
   | `Min{5, *}` | `%5h` | `8'hab` | `000ab` (`%h` は常に 0 埋め) |
-  | `Min{5, *}` | `%5h` | `8'hxx` | `000xx` (§8 Q-7) |
+  | `Min{5, *}` | `%5h` | `8'hxx` | `000xx` (Q-7) |
   | `Min{2, false}` | `%2d` | 12345 | `12345` (切り詰めない) |
   | `Min{3, *}` | `%3h` | `16'h1234` | `1234` |
-  | `Min{1, *}` | `%1h` | `8'h0a` | `a` か `0a` か §8 Q-8 (期待値を作らない) |
+  | `Min{1, *}` | `%1h` | `8'h0a` | `a` (最小表示を元に N 文字まで埋める。自動幅の `0a` には戻さない。Q-8) |
+  | `Min{2, *}` | `%2h` | `16'h00ab` | `ab` (Q-8) |
+  | `Min{1, false}` | `%1d` | `8'd5` | `5` (自動幅なら `␣␣5`。Q-8) |
+  | `Min{3, false}` | `%3d` | `8'd5` | `␣␣5` |
+  | `Min{4, *}` | `%4b` | `8'h05` | `0101` (Q-8) |
 - 実行: `--test golden_fmt` / 自動。
 
 #### M0-TC48 `itoa` 系 (§6.16.11〜§6.16.14)
@@ -970,14 +1004,15 @@
 - 対象と期待 (確保回数 = 0):
   1. 幅 1, 32, 63, 64 の `LogicVec` / `BitVec` の**全**演算 (構築 `zero filled from_u64 from_i64`、§5.2.0 の T4/T5/T6 の全メソッド、`to_u64`、`to_bit_vec`、`clone`)。結果の型が幅 ≤ 64 の場合に限る (幅を広げる `concat` / `replicate` で結果が 64 超になるものは除く)。
   2. 任意幅 (65, 129, 1024) のスライスカーネル (層 2) に、`Scratch::reserve_for(width)` で事前確保した `Scratch` を渡したもの: `mul div rem pow`、シフト、選択、連結、比較、リダクション、`clog2`。
-  3. 表示 (`format_int`): 計画は `&mut String` に書くので、事前に `reserve` した `String` と `Scratch` で 0 回 (§8 Q-9)。
+  3. 表示 (`format_int`, `format_int2`): 呼び出し側が `out.reserve(format_len_bound(width, radix))` (`Min{n}` のときは `max(n, その値)`) と `Scratch::reserve_for(width)` を済ませていれば 0 回 (Q-9)。予約しない場合は対象外。
+- 補助 (P): `format_len_bound(w, radix)` は、`Auto` と `Min{0}` の任意の値 (幅 1〜1024、S/U、X/Z を含む) の表示の長さ以上。`%d` の符号付きの最小値と全 x を必ず含める。
 - **検査器の自己テスト**: 計測区間で意図的に `Vec::with_capacity(1)` を作ると 1 以上を数える。
 - 実行: `cargo test -p svsim-logic --test no_alloc_core --test no_alloc_bitwise --test no_alloc_arith --test no_alloc_struct` / 自動。
 
 #### M0-TC55 長時間 proptest (L-2)
 - 手順: `PROPTEST_CASES=100000 cargo test -p svsim-logic --release`。
-- 期待: 全部通る。失敗したら最小化された入力を `proptest-regressions/` に保存し (コミットはマネージャ)、実装に差し戻す。
-- 追加確認: `proptest-regressions/` のファイルが git の管理下にある (plan §5.3)。
+- 期待: 全部通る。失敗したら最小化された入力が `tests/<name>.proptest-regressions` に保存される (コミットはマネージャ)。実装に差し戻す。
+- 追加確認: 失敗の再現ファイルは proptest の既定の置き場所 (テストファイルの隣の `tests/<name>.proptest-regressions`、STATUS の決定) にあり、git の管理下にある (plan §5.3)。
 - 実行: 受け入れ時に 1 回手動起動、以後は CI の `proptest-long` / 自動。所要時間を test-report に記録する。
 
 #### M0-TC56 proptest の入力分布 (plan §5.3)
@@ -992,7 +1027,7 @@
 
 #### M0-TC57 panic の規約 (plan §3.3 規約 1, 3)
 - 期待:
-  1. 幅の揃っていない文脈決定の演算 (`add` に幅 8 と 9、`eq` に幅 64 と 65、`cond_merge` に幅違い) は `assert!` で panic する (`#[should_panic]`)。**release ビルドでも** panic する (`cargo test --release` で確認)。
+  1. API の誤用は **panic** し、`Err` は返さない (Q-1)。release ビルドでも panic する (`cargo test --release` で確認)。対象: 幅の揃っていない文脈決定の演算 (`add` に幅 8 と 9、`eq` に幅 64 と 65、`cond_merge` に幅違い)、`copy_from` の幅違い、`from_planar` の長さ違い、`bit`/`set_bit` の範囲外の i。panic のメッセージに関数名と、期待した値・実際の値 (例: 幅 8 と 9) が含まれる。
   2. 0 除算、x のシフト量、範囲外・`i64` の端の選択、巨大なシフト量、NaN の変換、不正なリテラル文字列は **panic しない** (値または `Err` で返る)。差分テストの中で panic が出たら失敗 (proptest は panic を失敗として扱う)。
 - 実行: `--test diff_core` ほか / 自動。
 
@@ -1015,6 +1050,7 @@
 #### M0-TC60 参照モデルの独立性とゴールデンテスト (L-9)
 - 手順:
   1. `docs/STATUS.md` の M0-T9 の担当が、T3a〜T8 と別のエージェント個体であること (現在の記載は「implementer (別個体)」)。マネージャのセッション記録で確認する。
+  1b. 参照モデルの `RealToIntStatus` が 4 種 (Q-6) に揃っていること (STATUS の注意。T8 の着手時)。`RefVec::from_bits_str` が Q-22 の規則 (TC10) に従うこと。
   2. `svsim-logic-ref` の `Cargo.toml` に `svsim-logic` への依存が無い (`cargo tree -p svsim-logic-ref | grep -c svsim-logic$` が 0)。
   3. `cargo test -p svsim-logic-ref` が通り、その中に plan §5.4 のゴールデン (TC13〜TC21, TC24〜TC27, TC29, TC31〜TC33, TC36〜TC38, TC40〜TC43, TC45〜TC47 と同じ値) がある。**本計画の期待値表を参照モデルのゴールデンにも使ってよい** (仕様由来なので独立性を損なわない)。
   4. 参照モデルの公開関数が plan §5.1 の一覧 (`not` … `format_int`) を全部持つ。
@@ -1036,13 +1072,22 @@
   | `"aあb"` (あ = 3 バイト) | 4 (`b`) | (1,3) |
   | `"a\xffb"` | 2 (`b`) | (1,3) (不正バイトは 1 バイト = 1 列) |
   | `"\n\n\n"` | 2 | (3,1) |
-  | `"x\ry"` (単独の CR) | 2 | (1,3) (CR だけでは改行としない。§8 Q-10) |
-- 終端を超える offset の扱いは §8 Q-11。
+  | `"x\ry"` (単独の CR) | 2 | (1,3) (CR だけでは改行としない。Q-10) |
+  | `"ab\ncd"` (長さ 5) | 6 / 100 / `u32::MAX` (終端を超える) | (2,3) (ファイル末尾として扱う。panic しない。Q-11) |
+  | `""` (空) | 7 | (1,1) (Q-11) |
 - 実行: `cargo test -p svsim-common` / 自動。
 
 #### M0-TC62 `add_file` / `line_text` / `snippet` (C-1)
 - `add_file` を 3 回 → `FileId` は互いに異なり、`file(id)` で元のテキストが返る。
-- `line_text`: `"ab\r\ncd"` の行 1 → `b"ab"` か `b"ab\r"` か (改行を含めるか) は §8 Q-12。行 2 → `b"cd"`。
+- `line_text` は行末の改行を含まない (Q-12):
+  | テキスト | 行 | 期待 |
+  |---|---|---|
+  | `"ab\r\ncd"` | 1 / 2 | `b"ab"` (`\r` も除く) / `b"cd"` |
+  | `"ab\ncd\n"` | 2 / 3 | `b"cd"` / `b""` (最後の改行の後の空の行) |
+  | `"ab\r"` (改行なしの最終行が単独の CR で終わる) | 1 | `b"ab\r"` (単独の CR は残す。Q-10, Q-12) |
+  | `"a\r\r\nb"` | 1 | `b"a\r"` (除くのは `\n` の直前の `\r` 1 つだけ) |
+  | `""` | 1 | `b""` |
+  | `"ab"` | 0 / 2 (範囲外の行) | panic |
 - `snippet(Span{lo:1, hi:4})` on `"abcdef"` → `b"bcd"`。`lo == hi` → 空。
 - 実行: `cargo test -p svsim-common` / 自動。
 
@@ -1064,28 +1109,62 @@
    "notes":["note one"],
    "fixits":[{"file":"a.sv","line":2,"col":9,"end_line":2,"end_col":9,"replacement":";","message":"insert ';'"}]}
   ```
-  - `end_line`/`end_col` は `hi` (排他) の位置の `line_col`、`severity` の文字列表現、ラベルの並び (発行順)、`code` が無いときの表現 (null かキー省略か) は計画に明記が無い → §8 Q-13。マネージャの決定後に golden を確定する。上の値は「`hi` の位置、小文字、発行順」の案。
-- 決定性: 同じ入力で 2 回呼んで同じ JSON 文字列 (serde_json の出力)。
-- 実行: `cargo test -p svsim-common --test diag_json` (仮名) / 自動。
+  - 規則 (決定 Q-13): `end_line`/`end_col` は `hi` (排他) の位置の `line_col`、`severity` は小文字 (`"error" "warning" "note" "help"`)、ラベルと fix-it は発行順。
+- `code` が無い診断: `"code": null` (キーは省略しない)。`notes`/`fixits` が無ければ空の配列 `[]`。
+- ファイル名は `FileOrigin` のパスの文字列 (`Disk` と `Include` のどちらでも)。別ファイルのラベルはそのファイルの名前と行・列になる。
+- 決定性: 同じ入力で 2 回呼んで同じ JSON 文字列 (serde_json の出力)。JSON の文字列にしてから読み戻すと同じ値。
+- 既存のゴールデン: `crates/svsim-common/tests/diag_render.rs` の `json_full` (主 + 副 2 + 別ファイル (CRLF の include) + 注記 + fix-it)、`json_multiline_span` (`code: null`、複数行) は上の規則と一致しており、C-2 の JSON 部分のゴールデンとして採用する。上の `a.sv` の例は、同じファイルに追加してよい独立な例。
+- 実行: `cargo test -p svsim-common --test diag_render` / 自動。
 
 #### M0-TC64 単一行の人間向け表示 (C-2)
-- 入力: TC63 の診断から、主ラベルと副ラベル `declaration` と note だけのもの。
-- 期待 (表示の正確な書式は計画に無いので、ゴールデン文字列は T10 で書式をマネージャが承認した後に固定する。それまでは次の**性質**を検査する):
-  1. 1 行目に `a.sv:2:8`、`error`、`E0001`、`expected ';'` が含まれる。
-  2. ソースの 2 行目 `  wire w` がそのまま 1 行として含まれる。
-  3. その次の行で、主ラベルの位置 (列 8) に `^` が span の文字数 (1) だけ並ぶ。副ラベルの位置 (列 3〜6) にも下線 (4 文字) がある。
-  4. ラベルのメッセージ `here` と `declaration`、注記 `note one` が含まれる。
-  5. 複数行の span (`scope`) の診断では、開始位置 (2:1) と開始行だけを表示し、3 行目は表示しない。
-  6. マルチバイト文字の行 (`"  wire あw\n"` で `w` を指す) で、`^` が文字の列 (バイトではなく) に合う。
-  7. 色のエスケープシーケンス (`\x1b[`) を含まない。
-- 実行: `cargo test -p svsim-common --test diag_human` (仮名) / 自動。
+- 書式はマネージャが承認した T10 の rustc 風の書式 (`crates/svsim-common/tests/diag_render.rs` の現在の出力) を仕様とする。そこから読み取れる規則:
+  1. 1 行目: `<severity>[<code>]: <message>`。code が無ければ `<severity>: <message>`。色のエスケープシーケンスは含まない。
+  2. 主ラベルの位置: `<G 個の空白>--> <file>:<line>:<col>`。G は表示する行番号の最大の桁数 (ガター幅)。
+  3. 空のガター行 `<G 個の空白> |`。
+  4. ソース行: `<行番号 (G 桁で右詰め)> | <行のテキスト>`。タブは空白 4 個に展開する。不正な UTF-8 は U+FFFD で表示する。
+  5. ラベル行: `<G 個の空白> | <(col−1) 個の空白><印> <message>`。印は主ラベルが `^`、副ラベルが `-` で、span の文字数だけ並べる (空の span は 1 個)。message が空なら印の後ろに空白を付けない。同じ行のラベルは列の昇順に 1 行ずつ並べる。列は文字単位 (タブは 4 列)。
+  6. 複数行の span は開始行だけを表示し、印は開始位置からその行の終わりまで。
+  7. 別ファイルのラベルは `<G 個の空白>::: <file>:<line>:<col>` の行の後に、そのファイルのソース行とラベル行を置く。
+  8. 注記があるときは、空のガター行のあとに `<G 個の空白> = note: <text>` を 1 つずつ。fix-it は表示しない。最後は改行で終わる。
+- ゴールデン (既存。そのまま C-2 の人間向け表示のゴールデンとして採用): `diag_render.rs` の `human_full` (主 + 同じ行の副 + 別ファイルの副 + 注記)、`human_multiline_span_shows_start_line_only`、`human_tab_and_wide_gutter` (3 桁のガター、タブ、注記 2 個、空のメッセージ)、`human_empty_span_at_eof`、`human_utf8_and_invalid_bytes`。
+- 追加のゴールデン (上の規則から導いた。TC63 の `a.sv` を使う。`diag_render.rs` に追加する):
+  - 主ラベル `here` (17..18)、副ラベル `declaration` (12..16)、注記 `note one`、code `E0001`:
+    ```
+    error[E0001]: expected ';'
+     --> a.sv:2:8
+      |
+    2 |   wire w
+      |   ---- declaration
+      |        ^ here
+      |
+      = note: note one
+    ```
+  - 複数行の主ラベル `scope` (10..28) だけ、code なし、message `in scope`:
+    ```
+    error: in scope
+     --> a.sv:2:1
+      |
+    2 |   wire w
+      | ^^^^^^^^ scope
+    ```
+  - マルチバイト: ファイル `m.sv` = `"  wire あw\n"`、主ラベルが `w` (バイト 10..11、9 文字目。`あ` は 3 バイト) で message 空、`error: e`:
+    ```
+    error: e
+     --> m.sv:1:9
+      |
+    1 |   wire あw
+      |         ^
+    ```
+- 実行: `cargo test -p svsim-common --test diag_render` / 自動。
 
 #### M0-TC65 `DiagSink::into_sorted` (C-3)
-- 性質 (P): 異なる (file, lo) を持つ 1〜50 個の診断を、ランダムな順列で `emit` → `into_sorted` の結果が、順列に依らず同じ。順序は (FileId 昇順、開始位置 昇順)。
-- 同じ (file, lo) の診断が複数ある場合: 発行順を保つ (安定)。
-- `has_errors`: Error を 1 つ含めば true、Warning/Note だけなら false。
-- ラベルの無い診断の位置づけは §8 Q-14。
-- 実行: `cargo test -p svsim-common` / 自動。
+- 順序の規則 (Q-14。plan §4.2 の「発行順」は置き換えられた): **位置の無い (ラベルの無い) 診断が先頭**、その後に位置のある診断。キーは (主 span、重大度、コード、メッセージ、ラベル、注記、fix-it) の辞書順。主 span は最初の `primary` ラベル (無ければ最初のラベル) の span で、(FileId、lo、hi) の順に比べる。発行順は使わない。
+- 固定例: ファイル a (id 小) と b に、`b0` (b, 0)、`a9` (a, 9)、`a2` (a, 2)、ラベル無しの `none` の順に発行 → `["none", "a2", "a9", "b0"]`。
+- 固定例 (同じ位置): 同じ span で重大度・メッセージだけが違う 2 つ → 発行順を入れ替えても同じ順序。ラベル無しの Error が 2 つ (`"y"`、`"x"`。他の内容は同じ) → メッセージの順 (`"x"` が先) で、発行順に依らない。
+- 固定例 (主 span の選び方): ラベルが [副 (a, 1)、主 (a, 50)] の診断と、[主 (a, 10)] の診断 → 後者 (lo 10) が先 (前者のキーは主ラベルの 50)。
+- 性質 (P): 任意の 1〜50 個の診断 (位置の有無、同じ位置、同じ内容の重複を含む) を、ランダムな順列で `emit` → `into_sorted` の結果が、順列に依らず同じ。結果の先頭の連続部分がちょうど位置の無い診断。
+- `has_errors`: Error を 1 つ含めば true、Warning/Note/Help だけなら false。
+- 実行: `cargo test -p svsim-common` (`diag.rs` 内) / 自動。
 
 #### M0-TC66 インターン (C-4)
 - `intern("foo")` を 2 回 → 同じ `Symbol`。`intern("bar")` → 違う `Symbol`。`resolve(intern(s)) == s`。
@@ -1107,8 +1186,10 @@
   | `finish()` → `WordArena::new` | 長さ 12 ワード、全部 0 |
   | 新しい builder で `alloc(u32::MAX, 1)` → `alloc(1, 1)` | 1 回目は `Ok(0)`、2 回目は `Err` (溢れ) |
   | 新しい builder で `alloc(u32::MAX − 3, 1)` → `alloc(1, 8)` | 2 回目は `Err` (位置合わせで溢れる) |
-  | `alloc(0, 1)` | `Ok` (長さ 0。§8 Q-15) |
-- 位置合わせが 2 のべきでない (`3`) ときの扱いは §8 Q-15。
+  | 新しい builder で `alloc(3, 1)` → `alloc(0, 8)` → `finish()` | 2 回目は `Ok(WordOffset(8))` (位置合わせしたオフセット)。長さは 3 のまま (領域を消費しない。Q-15) |
+  | 新しい builder で `alloc(0, 1)` → `alloc(2, 1)` | `Ok(0)` → `Ok(0)` |
+  | `alloc(1, 3)` / `alloc(1, 0)` / `alloc(1, 6)` | `Err(ArenaError::BadAlign)` (Q-15) |
+  | 上の溢れの 2 行 | `Err(ArenaError::Overflow)` (Q-15) |
 - 実行: `cargo test -p svsim-common --test arena` / 自動。
 
 #### M0-TC69 `disjoint_mut` (C-5)
@@ -1122,7 +1203,10 @@
   | `[(10,4)]` | `Err` (範囲外) |
   | `[(0,12)]` | `Ok` |
   | `[(0,1), (1,1), (2,1)]` (N=3) | `Ok` |
-- 長さ 0 の区間を含む場合は §8 Q-16。
+  | `[(0,4), (2,0)]` | `Ok` (長さ 0 の区間は重ならない。Q-16) |
+  | `[(5,0), (5,0)]` | `Ok` |
+  | `[(12,0)]` | `Ok` (`off <= len`) |
+  | `[(13,0)]` | `Err` (範囲外) |
 - 実行: `--test arena` / 自動。
 
 #### M0-TC70 スナップショット・復元・`content_hash` (C-5、決定性)
@@ -1134,7 +1218,7 @@
   | `[1]` | `0x89cd31291d2aefa4` |
   | `[0, 0x0123456789abcdef]` | `0x2d71366c8ba60175` |
 - 手順: 値を書く → `snapshot` → ハッシュ h0 → 何ワードか変更 (h1 ≠ h0 を確認) → `restore` → ハッシュが h0、`words()` も元と一致。
-- 別の長さの layout から作ったスナップショットで `restore` → 長さの不一致を検出する (panic か `Err` かは §8 Q-17)。
+- 別の長さの layout から作ったスナップショットで `restore` → **panic** (`#[should_panic]`。Q-17)。アリーナの内容は変わっていない (`catch_unwind` で確認してもよい)。
 - 実行: `--test arena` / 自動。
 
 #### M0-TC71 アリーナとロジック値ビューの結合 (C-5)
@@ -1153,7 +1237,7 @@
 
 #### M0-TC72 マニフェストの解析とエラー (K-4)
 - 正常: plan §7.1 の `corpus/manifest.toml` が読めて、`svsim-corpus list` に `sv-tests` が 1 件出る。`rev` = `7274242bcf99a2f6f8282493d0200c92eb87d347`。
-- エラーになるべき入力 (各々で `Err`、CLI なら終了コード 1 か 2 (§8 Q-18)、メッセージにエントリ名かキー名を含む):
+- エラーになるべき入力 (各々で `Err`、CLI なら終了コード **1** (マニフェストの誤りは実行時エラー。Q-18)、メッセージにエントリ名かキー名を含む):
   | 入力 | 理由 |
   |---|---|
   | `rev = "main"` | ブランチ名 |
@@ -1165,12 +1249,14 @@
   | 同じ `name` が `--manifest` で追加した別ファイルにある | 重複 (ファイルをまたぐ) |
   | 未知のキー: トップレベル (`foo = 1`)、`[[entry]]` (`colour = "x"`)、`[entry.source]` (`branch = "main"`)、`[entry.discover]` (`glob = "*"`) | `deny_unknown_fields` |
   | `[entry.source]` が無い、`git` が無い | 必須キー |
-  | `kind = "glob"` (M0 で未対応のアダプタ) | §8 Q-19 |
-- 大文字の 16 進の 40 桁 SHA、`version = 2` の扱いは §8 Q-19。
+  | `kind = "glob"` (M0 で未対応のアダプタ) | 未知の `kind` (Q-19) |
+  | `version = 2`、`version` が無い | 版 (Q-19) |
+  | `rev = "7274242BCF99A2F6F8282493D0200C92EB87D347"` (大文字の 40 桁) | 小文字の 16 進だけを許す (Q-19) |
+  | `git = "file:///tmp/x.git"` (テスト用の許可フラグなし) | file:// の URL は拒否 (STATUS の決定、T13)。同じマニフェストがテスト用の許可フラグ付きなら `Ok` |
 - 実行: `cargo test -p svsim-corpus` / 自動。
 
 #### M0-TC73 file:// での取得とキャッシュ (K-1、ネットワーク不要)
-- 準備: 一時ディレクトリに作業リポジトリを作り、コミット C1 → C2 → C3 (先端) を作って bare に push。`SVSIM_CORPUS_CACHE` を一時ディレクトリに。マニフェストの `rev` = C2 (**先端でない**コミット)。
+- 準備: 一時ディレクトリに作業リポジトリを作り、コミット C1 → C2 → C3 (先端) を作って bare に push。`SVSIM_CORPUS_CACHE` を一時ディレクトリに。マニフェストの `rev` = C2 (**先端でない**コミット)。file:// の URL を使うので、テスト用の許可フラグ (T13 で追加。名前は実装の doc に従う) を付けて実行する (付けなければ TC72 のとおり拒否される)。
 - 期待:
   1. `fetch` が成功し、`<cache>/<name>/<C2>/` に C2 の内容 (C3 で足したファイルが無い) がある。`git -C <dir> rev-parse HEAD` = C2。`.svsim-complete` がある。`<cache>/<name>/.tmp-*` が残っていない。`.lock` が残っていない。
   2. 2 回目の `fetch`: bare リポジトリを**削除してから**実行しても成功する (ネットワーク/リモートに出ていない)。`--offline` でも成功。
@@ -1187,13 +1273,13 @@
 - 実行: `cargo test -p svsim-corpus` / 自動 (3 はローカルのポートを使うのでネットワーク不要)。
 
 #### M0-TC75 ロック (K-5)
-- ロックファイルの中身の形式 (PID と作成時刻) は実装の doc に書かれたものを使う (§8 Q-20)。
+- ロックファイルの形式 (Q-20): 2 行のテキスト `pid=<10進>` と `created_unix=<10進の秒>`。テストはこの形式でロックを手で作る。取得中に作られたロックもこの形式であること (取得をロックの直後に止められない場合は、生きているロックのケースで中身を読んで確認する)。
   | 状態 | 期待 |
   |---|---|
   | `<cache>/<name>/.lock` に**存在しない PID** (`/proc/sys/kernel/pid_max` より大きい値) | 古いロックとして取り除き、取得が成功。終了後 `.lock` が無い |
   | `.lock` に**生きているプロセス**の PID (テストが起動した `sleep 60` の PID) | 待たずにエラー (終了コード 1)、メッセージに `--force-unlock` を含む。キャッシュは変更されない |
   | 同じ状態で `--force-unlock` | 成功 |
-  | ロックの中身が壊れている (空、数字でない) | §8 Q-20 |
+  | ロックの中身が壊れている (空、`pid=abc`、`created_unix` の行だけ、ゴミのバイト列) | 自動では取り除かずエラー (終了コード 1)、メッセージに `--force-unlock` を含む (Q-20)。`--force-unlock` を付ければ成功 |
 - 実行: `cargo test -p svsim-corpus` / 自動 (Linux 前提。`/proc` を使う)。
 
 #### M0-TC76 sv-tests アダプタの単体テスト (K-2)
@@ -1222,8 +1308,17 @@
   - Preprocess=Pass、Parse=Fail のとき、Elaborate 以降を実行しない。
   - `target = Parse` のケースでは Elaborate を実行しない。
   - runner が登録されていない段階は `NotImplemented` で止まる。runner が 0 個なら全ケースが `Preprocess: NotImplemented`。
-  - `should_fail = true` のケースで Parse=Fail → 「期待どおり」。全部 Pass → 「期待どおりでない」。生の結果と判定の両方が記録される。
-  - `NotImplemented` の場合の「期待どおりか」の判定は §8 Q-21。
+  - 判定は 3 値の `Verdict { AsExpected, Unexpected, Undetermined }` (Q-21)。生の結果と判定の両方が記録される。
+    | should_fail | 段階の結果 (target = Parse) | Verdict |
+    |---|---|---|
+    | true | Preprocess=Pass、Parse=Fail | AsExpected |
+    | true | Preprocess=Fail | AsExpected (`target` までのどこかで Fail) |
+    | true | Preprocess=Pass、Parse=Pass | Unexpected |
+    | false | Preprocess=Pass、Parse=Pass | AsExpected |
+    | false | Preprocess=Pass、Parse=Fail | Unexpected |
+    | true / false | Preprocess=NotImplemented | Undetermined |
+    | true / false | Preprocess=Pass、Parse=Skipped / Timeout / NotImplemented | Undetermined |
+  - runner が 0 個なら全ケースが Undetermined。
 - `Stage` の順序: `Preprocess < Parse < Elaborate < Simulate < Compare`。
 - 実行: `cargo test -p svsim-corpus` / 自動。
 
@@ -1270,7 +1365,7 @@
 - 期待:
   1. 終了コード 0 (ケースの失敗では 0 以外にしない)。
   2. `results.jsonl` が 1028 行、各行が有効な JSON で、id が 1 回ずつ現れる。全行で段階の結果が `Preprocess: NotImplemented` (それ以外の段階の結果を持たない)。
-  3. `summary.json` の Preprocess × NotImplemented が 1028、他は 0。
+  3. `summary.json` の Preprocess × NotImplemented が 1028、他は 0。全 1028 件の `Verdict` が `Undetermined` (should_fail の 79 件も含む。Q-21)。
   4. 標準出力に件数が出る。
   5. **決定性**: r1 と r2 で、所要時間のフィールドを除いた `results.jsonl` (行の順序を含めて) と `summary.json` がバイト単位で同一。
   6. `--out` を省略すると `target/corpus-results/sv-tests/` に出る。
@@ -1283,7 +1378,8 @@
   | `svsim-corpus` (サブコマンドなし)、`svsim-corpus frobnicate`、`svsim-corpus fetch --bogus` | 2 |
   | `svsim-corpus fetch --offline` (空のキャッシュ) | 1 |
   | `svsim-corpus discover` (NAME なし) | 2 |
-  | `svsim-corpus discover no-such-entry` | §8 Q-18 |
+  | `svsim-corpus discover no-such-entry`、`fetch no-such-entry`、`run no-such-entry` | **2** (存在しないエントリ名は使い方の誤り。Q-18) |
+  | 誤りのあるマニフェストを `--manifest` で渡して `list` | **1** (Q-18) |
   | `cargo corpus list` (エイリアス) | `svsim-corpus list` と同じ |
 - 実行: `cargo test -p svsim-corpus` (assert_cmd 等は依存に無いので `std::process::Command` で `CARGO_BIN_EXE_svsim-corpus` を起動) / 自動。
 
@@ -1324,59 +1420,69 @@
 
 ---
 
-## 7. 暫定期待値と VCS 確認リスト (plan §11) の対応
+## 7. 暫定期待値と VCS 確認リスト (plan v2.1 §11、V-1〜V-18) の対応
 
-VCS の結果 (M1 で確認) が暫定と違ったら、該当 TC の期待値を差し替える (挙動を `--compat=vcs` に回すかはその時点でマネージャが判断)。
+VCS の結果 (M1 で確認) が暫定と違ったら、該当 TC の期待値を差し替える (挙動を `--compat=vcs` に回すかはその時点でマネージャが判断)。テストのコメントには `[要VCS確認 V-n]` を書く。
 
-| V-ID | 暫定期待値 | TC |
-|---|---|---|
-| V-1 | 符号付き 最小値 / −1 = 最小値、剰余 0 | TC26 |
-| V-2 | 2 値の 0 除算・剰余 = 0、2 値 `0 ** -1` = 0 | TC26, TC27 |
-| V-3 | `>>>` で符号ビット z → z で埋める (シフト量 ≥ w でも) | TC29 |
-| V-4 | NaN / ±∞ → 整数 = 0 (+ `NotFinite`) | TC43 |
-| V-5 | 整数 → string で x/z は 0 として扱い、0 バイトは捨てる | TC40 |
-| V-6 | atoi 系は符号・空白・接頭辞を解釈しない、32 ビット超は切り詰め | TC41 |
-| V-7 | `%d` の自動幅、`%Nd` は空白、`%0Nd` は 0、`%Nh` は 0、`%0h` は x 桁で止まる | TC46, TC47 |
-| V-8 | `1'bx ? 1'bz : 1'bz` = x | TC20 |
-| V-9 | 2 値データ × 4 値の自己決定オペランドは 4 値で評価 (x)、選択だけ 2 値の 0 | TC33, TC34 |
-| V-10 | `$clog2(0)` = 0、x/z → `None` | TC36 |
-| V-11 | サイズなしリテラルが 32 ビット超 → 広げて警告フラグ | TC37, TC38 |
-| V-12 | エッジ表 (x↔z はエッジでない、z→1 は posedge、1→z は negedge)、多ビットは LSB | TC21 |
-| V-13 | `%h`/`%o` の桁に x と z が混在 → `X` | TC45 |
-| V-14 | 整数 → 実数で x/z は 0 | TC42 |
+| V-ID | 暫定期待値 | TC | 付録 A |
+|---|---|---|---|
+| V-1 | 符号付き 最小値 / −1 = 最小値、剰余 0 | TC26 | A-1 |
+| V-2 | 2 値の 0 除算・剰余 = 0、2 値 `0 ** -1` = 0 | TC26, TC27 | A-2 |
+| V-3 | `>>>` で符号ビット z → z で埋める (シフト量 ≥ w でも) | TC29 | A-3 |
+| V-4 | NaN / ±∞ → 整数 = 0 (+ `NotFinite`) | TC43 | A-4 |
+| V-5 | 整数 → string で x/z は 0 として扱い、0 バイトは捨てる | TC40 | A-5 |
+| V-6 | atoi 系は符号・空白・接頭辞を解釈しない、先頭の `_` は読み飛ばす (`"_12"` → 12)、32 ビット超は切り詰め | TC41 | A-6 |
+| V-7 | `%d` の自動幅、`%Nd` は空白、`%0Nd` は 0、`%Nh` は 0、`%0h` は x 桁で止まる。追加: `%05d` の負数 → `-0005`、`%5h` of `8'bx` → `000xx`、`%05d` of `8'bx` → `0000x`、N が自動幅より小さい `%1h` of `8'h0a` → `a` | TC46, TC47 | A-7 |
+| V-8 | `1'bx ? 1'bz : 1'bz` = x | TC20 | A-8 |
+| V-9 | 2 値データ × 4 値の自己決定オペランドは 4 値で評価 (x)、選択だけ 2 値の 0 | TC33, TC34 | A-9 |
+| V-10 | `$clog2(0)` = 0、x/z → `None` | TC36 | A-10 |
+| V-11 | サイズなしリテラルが 32 ビット超 → 広げて警告フラグ | TC37, TC38 | A-11 |
+| V-12 | エッジ表 (x↔z はエッジでない、z→1 は posedge、1→z は negedge)、多ビットは LSB | TC21 | A-12 |
+| V-13 | `%h`/`%o` の桁に x と z が混在 → `X` | TC45 | A-13 |
+| V-14 | 整数 → 実数で x/z は 0 | TC42 | A-14 |
+| V-15 | `==` で既知ビットの不一致があれば x を含んでも 0 (`4'b1x00 == 4'b0x00` → 0、`4'b1x00 == 4'b1000` → x) | TC16 | A-15 |
+| V-16 | `==?` は右の x/z だけがワイルドカード、左の x/z は x | TC17 | A-16 |
+| V-17 | casez は両側の z を無視、casex は両側の x/z を無視 | TC18 | A-17 |
+| V-18 | サイズ付きリテラルの `truncated` は 0 以外 (1/x/z) のビットが落ちたときだけ (`4'o17`、`8'h0ff` → false、`4'hff` → true) | TC37 | A-18 |
 
-規格の条番号自体が未検証のもの (plan 冒頭の注記: 11.4.3/4/6/7/8/9、11.6.1、11.8.2、6.8、6.11.2、9.4.2、12.4、12.5.1、20.8.1、21.2.1.3/4) を根拠にした期待値は、規格本文を参照できるようになった時点で照合する。中でも §11.4.5 の「既知ビットの不一致で 0」、§11.4.6 の左右の非対称、§12.5.1 の casez/casex は plan-review で「未検証 (記憶では正しい)」とされたので、M1 の VCS 確認テスト集にも入れることを勧める (付録 A の A-15〜A-17)。
+規格の条番号自体が未検証のもの (plan 冒頭の注記: 11.4.3/4/6/7/8/9、11.6.1、11.8.2、6.8、6.11.2、9.4.2、12.4、12.5.1、20.8.1、21.2.1.3/4) を根拠にした期待値は、規格本文を参照できるようになった時点で照合する。
 
 ---
 
-## 8. 未確定事項 (マネージャへの質問)
+## 8. 未確定事項の解消 (plan.md v2.1 §12 の回答の反映先)
 
-計画に書かれていないため、期待値を作らなかった項目。決まり次第、該当 TC に期待値を足す。
+v1 で挙げた Q-1〜Q-22 は、plan.md v2.1 §12 の回答 (STATUS: マネージャが採用を決定) で**すべて解消**した。v1 の提案と回答が違ったものは「差分」欄に書いた。
 
-| ID | 事項 | 関係する TC | テスト計画からの提案 |
+| ID | 回答 (要旨) | 反映した TC | 差分 (v1 の提案との違い) |
 |---|---|---|---|
-| Q-1 | `from_planar` の長さ不一致、`set_bit` の範囲外 i などの API 誤用は panic か `Err` か | TC11 | 幅の assert と同じく panic (release でも) |
-| Q-2 | `count_bits` に空の集合を渡したとき | TC14 | 0 を返す |
-| Q-3 | 2/8/16 進で「桁から得たビット数 > size」だが落ちるビットが全部 0 のとき (`4'o17`、`8'h0ff`)、`truncated` を立てるか | TC37 | 字義どおり立てる (計画の文言)、または 0 以外が落ちたときだけ。Verilator の警告と合わせるなら後者 |
-| Q-4 | atoi の先頭の `_` (`"_12"`) | TC41 | 読み飛ばして 12 (計画の「数字と `_` を読む」の字義) |
-| Q-5 | `to_f64` が f64 の範囲を超えるとき (+∞ にするか、最大値か) | TC42 | IEEE 754 の RNE どおり ±∞ |
-| Q-6 | `RealToIntStatus` の列挙子 (正常、範囲外で切り詰めた、NotFinite) | TC43 | 少なくとも Ok と NotFinite。切り詰めの有無も返すと sema の警告に使える |
-| Q-7 | `%05d` の負数 (`-0005` か `000-5` か)、`%0Nd`/`%Nh` で値が x/z のときの埋め文字 | TC47 | `-0005`、`000xx` (V-7 に追加して VCS で確認) |
-| Q-8 | `%Nh`/`%Nd` で N が自動幅より小さく、値が N 文字に収まるとき、最小表示から埋めるのか自動幅のままか (`%1h` of `8'h0a`) | TC47 | V-7 に追加して VCS で確認。それまで期待値を作らない |
-| Q-9 | `format_int` が `out: &mut String` を伸ばすときの確保を no_alloc の対象にするか | TC54 | 事前に `reserve` した場合だけ 0 回を要求 |
-| Q-10 | 単独の CR (`\r` のみ) を改行とみなすか | TC61 | みなさない (LF だけを数える) |
-| Q-11 | `line_col` に終端を超える offset を渡したとき | TC61 | panic (呼び出し側の誤り) |
-| Q-12 | `line_text` が行末の `\n` / `\r\n` を含むか | TC62 | 含まない (`\r` も除く) |
-| Q-13 | 診断 JSON の `end_line/end_col` の意味 (排他の `hi` の位置か、最後の文字か)、`severity` の文字列、`code` が無いときの表現、ラベルの順序 | TC63 | `hi` の位置 (排他)、小文字、`null`、発行順 |
-| Q-14 | `into_sorted` でラベルの無い診断 (位置なし) の順序 | TC65 | 最後に発行順で並べる |
-| Q-15 | `alloc` の `align_words` が 2 のべきでない・0 のとき、`words = 0` のとき | TC68 | 2 のべきでなければ `Err` (または panic)、`words = 0` は `Ok` |
-| Q-16 | `disjoint_mut` に長さ 0 の区間があるとき (重なりとみなすか) | TC69 | 長さ 0 は重ならない扱いで `Ok` |
-| Q-17 | 長さの違うスナップショットの `restore` は panic か | TC70 | `restore` の戻り値が `()` なので panic |
-| Q-18 | CLI で存在しないエントリ名・マニフェストの誤りは終了コード 1 (実行時エラー) か 2 (使い方の誤り) か | TC72, TC81 | 1 |
-| Q-19 | マニフェストの `version` が 1 以外、未知の `kind`、大文字の 16 進 SHA | TC72 | いずれもエラー (SHA は小文字だけ許す) |
-| Q-20 | ロックファイルの中身の形式と、壊れたロックの扱い | TC75 | 形式を doc に書く。壊れたロックは「生きているかわからない」のでエラー + `--force-unlock` を案内 |
-| Q-21 | `should_fail` のケースで結果が `NotImplemented` のときの「期待どおりか」の判定値 | TC77 | 「判定不能」(3 値目) を持つ。M0 では全件が判定不能 |
-| Q-22 | `from_bits_str("")` (幅 0) と大文字の `X`/`Z` を受けるか | TC10 | 空は幅 0 として `Ok`、大文字も受ける (参照モデルと同じにする必要があるので、T3a と T9 に同じ回答を渡す) |
+| Q-1 | API の誤用は panic (release でも)、メッセージに関数名と期待値・実際の値 | TC11, TC57 | — |
+| Q-2 | `count_bits` の空の集合 → 0 | TC14 | — |
+| Q-3 | `truncated` は 0 以外のビットが落ちたときだけ [V-18] | TC37, TC38 | 字義どおりの案ではなく後者の案 |
+| Q-4 | atoi の `_` は読み飛ばす、数字が無ければ 0 [V-6] | TC41 | — |
+| Q-5 | 範囲外の `to_f64`/`to_f32` は ±∞ | TC42 | — |
+| Q-6 | `RealToIntStatus { Exact, Rounded, Wrapped, NotFinite }` | TC43, TC44, TC60 | 4 種で確定。参照モデルは T8 着手時に 4 種に合わせる |
+| Q-7 | `-0005`、`000xx`、`0000x` [V-7] | TC47 | — |
+| Q-8 | 最小表示を元に N 文字まで埋める (`%1h` of `8'h0a` → `a`) [V-7] | TC47 | — |
+| Q-9 | `format_len_bound` で予約すれば確保 0 回 | TC54 | `format_len_bound` が追加 |
+| Q-10 | 改行は LF だけ | TC61, TC62 | — |
+| Q-11 | 終端を超える offset は**ファイル末尾として扱う** (panic しない) | TC61 | **v1 の提案 (panic) と逆** |
+| Q-12 | `line_text` は `\n` とその直前の `\r` 1 つを除く。最終行の単独の `\r` は残す | TC62 | — |
+| Q-13 | JSON: `hi` (排他) の位置、小文字、`code: null`、発行順 | TC63 | — |
+| Q-14 | `into_sorted` は**位置の無い診断を先頭**に、内容 (主 span、重大度、コード、メッセージ、…) の辞書順。発行順は使わない | TC65 | **v1 の提案 (最後に発行順) と逆。同じ位置でも発行順を使わない** |
+| Q-15 | `BadAlign` (0 / 2 のべきでない)、`Overflow`、`words = 0` は `Ok` で消費しない | TC68 | — |
+| Q-16 | 長さ 0 の区間は重ならない扱い (`off <= len` なら `Ok`) | TC69 | — |
+| Q-17 | 長さの違う `restore` は panic | TC70 | — |
+| Q-18 | マニフェストの誤りは 1、**存在しないエントリ名だけ 2** | TC72, TC81 | **v1 の提案 (どちらも 1) と違う** |
+| Q-19 | `version` ≠ 1、未知の `kind`、大文字の SHA はいずれもエラー (1) | TC72 | — |
+| Q-20 | ロックは `pid=<n>` と `created_unix=<n>` の 2 行。壊れたロックはエラー + `--force-unlock` の案内 | TC75 | — |
+| Q-21 | `Verdict { AsExpected, Unexpected, Undetermined }`、M0 は全件 Undetermined | TC77, TC80 | — |
+| Q-22 | bits 文字列: 空は幅 0 で `Ok`、`0 1 x X z Z` を受ける、`_` を含む他の文字はエラー、出力は小文字 | TC10, TC60 | v1 の TC10 にあった「`_` を無視」の期待値は削除 |
+
+TC64 の人間向け表示は、Q とは別に、マネージャが承認した T10 の書式 (rustc 風) を仕様としてゴールデンを固定した。
+
+新たな未確定事項は無い。ただし次の 2 点は、回答の文言から期待値を導いた (実装時に食い違いがあればマネージャに報告すること)。
+- TC43: `from_f64_trunc` で小数部を捨てた場合の状態は `Rounded` とした (Q-6 の「小数部を丸めた」に 0 方向への切り捨ても含めると解釈)。
+- TC68: `alloc(0, 8)` は位置合わせしたオフセットを返すが、builder の次の位置は進めない (長さに影響しない) と解釈した (Q-15 の「領域は消費しない」)。
 
 ---
 
@@ -1415,7 +1521,7 @@ cargo corpus run sv-tests --out /tmp/r1 && cargo corpus run sv-tests --out /tmp/
 # 5. 手動 (TC6, TC8, TC59, TC60, TC82)
 gh run list --limit 5
 ```
-テスト実行エージェントは test-report.md に、TC ごとの合否、実際のコマンド出力 (件数・所要時間)、§8 の未確定事項のうち実装がどう振る舞ったか (記録のみ。合否には使わない) を書く。
+テスト実行エージェントは test-report.md に、TC ごとの合否、実際のコマンド出力 (件数・所要時間)、§8 の末尾の「回答の文言から導いた 2 点」について実装がどう振る舞ったかを書く。
 
 ---
 
@@ -1430,8 +1536,8 @@ M0 では実行しない。M1 でパーサが入ったら、各断片を `$displ
 | A-3 | V-3 | `logic signed [3:0] s=4'bz000; $display("%b %b", s>>>1, s>>>8);` | `zz00 zzzz` |
 | A-4 | V-4 | `real r=0.0/0.0; int i=r; $display("%0d %0d", i, $rtoi(1.0/0.0));` | `0 0` |
 | A-5 | V-5 | `string s = string'(16'h41xx); $display("%0d %s", s.len(), s);` | `1 A` |
-| A-6 | V-6 | `string s="-12"; $display("%0d %0d %0d", s.atoi(), " 12".atoi(), "0xff".atohex());` | `0 0 0` |
-| A-7 | V-7 | `logic [7:0] v=8'd42; logic signed [7:0] n=-5; $display("[%d][%5d][%05d][%5h][%0h][%d]", v, v, n, v, 12'bxxxx_0000_0001, 8'bx);` | `[ 42][   42][-0005][0002a][x01][  x]` |
+| A-6 | V-6 | `string s="-12"; $display("%0d %0d %0d %0d", s.atoi(), " 12".atoi(), "0xff".atohex(), "_12".atoi());` | `0 0 0 12` |
+| A-7 | V-7 | `logic [7:0] v=8'd42; logic signed [7:0] n=-5; $display("[%d][%5d][%05d][%5h][%0h][%d][%5h][%05d][%1h]", v, v, n, v, 12'bxxxx_0000_0001, 8'bx, 8'bx, 8'bx, 8'h0a);` | `[ 42][   42][-0005][0002a][x01][  x][000xx][0000x][a]` |
 | A-8 | V-8 | `logic c=1'bx; $display("%b %b", c?1'bz:1'bz, c?4'b1x0z:4'b1x0z);` | `x 1x0x` |
 | A-9 | V-9 | `bit [7:0] b=8'ha5; logic [2:0] s='x; bit [7:0] r; $display("%b %b %b", b<<s, b**s, b[s]); r=b<<s; $display("%b", r);` | `xxxxxxxx xxxxxxxx 0` / `00000000` |
 | A-10 | V-10 | `localparam P=$clog2(0); $display("%0d %0d", P, $clog2(x_sig));` | `0 x` (実行時) |
@@ -1439,6 +1545,7 @@ M0 では実行しない。M1 でパーサが入ったら、各断片を `$displ
 | A-12 | V-12 | `logic s; always @(posedge s) $display("pos %t", $time); initial begin s=1'bx; #1 s=1'bz; #1 s=1'b1; #1 s=1'bz; #1 s=1'bx; end` + negedge 版 | posedge は z→1 の 1 回だけ、negedge は 1→z の 1 回だけ |
 | A-13 | V-13 | `$display("%h %o", 4'bxz01, 3'bxz1);` | `X X` |
 | A-14 | V-14 | `real r = 8'b1x01; $display("%f", r);` | `9.000000` |
-| A-15 | (§11.4.5) | `$display("%b %b", 4'b1x00 == 4'b0x00, 4'b1x00 == 4'b1000);` | `0 x` |
-| A-16 | (§11.4.6) | `$display("%b %b %b", 4'b1x10 ==? 4'b1x1z, 4'b1x10 ==? 4'b1010, 4'b1x1z ==? 4'b1010);` | `1 x x` |
-| A-17 | (§12.5.1) | `casez (4'b1x01) 4'b1101: $display("hit"); default: $display("miss"); endcase` と casex 版 | casez `miss`、casex `hit` |
+| A-15 | V-15 | `$display("%b %b", 4'b1x00 == 4'b0x00, 4'b1x00 == 4'b1000);` | `0 x` |
+| A-16 | V-16 | `$display("%b %b %b", 4'b1x10 ==? 4'b1x1z, 4'b1x10 ==? 4'b1010, 4'b1x1z ==? 4'b1010);` | `1 x x` |
+| A-17 | V-17 | `casez (4'b1x01) 4'b1101: $display("hit"); default: $display("miss"); endcase` と casex 版 | casez `miss`、casex `hit` |
+| A-18 | V-18 | `logic [3:0] a = 4'o17; logic [7:0] b = 8'h0ff; logic [3:0] c = 4'hff;` を VCS でコンパイルし、切り詰めの警告が出る行を見る | 警告は `c` の行だけ |
