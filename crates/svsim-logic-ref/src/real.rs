@@ -96,13 +96,35 @@ pub fn to_f32(x: &RefVec, signed: bool) -> f32 {
     if neg { -mag } else { mag }
 }
 
-/// 実数 → 整数の変換の状態。
+/// 実数 → 整数の変換の状態 (plan.md §12 Q-6)。
+///
+/// 幅 w の dst に「収まる」とは、丸めた後の整数 n が −2^(w−1) ≤ n ≤ 2^w − 1 であること
+/// (符号付きの範囲と符号なしの範囲の和集合)。幅 0 では n = 0 のときだけ収まるとする。
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum RefRealToIntStatus {
-    /// 有限の値を変換した。
-    Ok,
+    /// 入力が整数で、dst に収まった。
+    Exact,
+    /// 小数部を丸めた (`$rtoi` の 0 方向への切り捨ても含む。STATUS の決定) が、dst に収まった。
+    Rounded,
+    /// 丸めた後の整数が dst に収まらず、2 の補数で切り詰めた。丸めの有無によらずこちらを優先する (Q-6)。
+    Wrapped,
     /// NaN または ±∞。結果は 0 [要VCS確認 V-4]。
     NotFinite,
+}
+
+/// 整数 `n` が幅 `width` の dst に収まるか (Q-6): −2^(w−1) ≤ n ≤ 2^w − 1。
+fn fits(width: usize, n: &BigInt) -> bool {
+    if width == 0 {
+        return n.is_zero();
+    }
+    let w = width as u64;
+    if n.sign() == Sign::Minus {
+        // |n| ≤ 2^(w−1)
+        n.magnitude() <= &(BigUint::one() << (w - 1))
+    } else {
+        // n < 2^w
+        n.magnitude().bits() <= w
+    }
 }
 
 /// 丸め方。
@@ -130,20 +152,30 @@ fn from_f64(width: usize, v: f64, mode: Rounding) -> (RefVec, RefRealToIntStatus
         (frac | (1u64 << 52), biased - 1075)
     };
     let mant = BigUint::from(mant);
+    // 小数部が 0 でなかったか (丸めたか)。
+    let mut inexact = false;
     let mag: BigUint = if exp >= 0 {
         mant << (exp as u64)
     } else {
         let sh = (-exp) as u64;
         let q: BigUint = &mant >> sh;
         let rem: BigUint = &mant - (&q << sh);
+        inexact = !rem.is_zero();
         let half = BigUint::one() << (sh - 1);
         match mode {
             Rounding::HalfAwayFromZero if rem >= half => q + 1u32,
             _ => q,
         }
     };
-    let signed = BigInt::from_biguint(if neg { Sign::Minus } else { Sign::Plus }, mag);
-    (RefVec::from_bigint(width, &signed), RefRealToIntStatus::Ok)
+    let n = BigInt::from_biguint(if neg { Sign::Minus } else { Sign::Plus }, mag);
+    let status = if !fits(width, &n) {
+        RefRealToIntStatus::Wrapped
+    } else if inexact {
+        RefRealToIntStatus::Rounded
+    } else {
+        RefRealToIntStatus::Exact
+    };
+    (RefVec::from_bigint(width, &n), status)
 }
 
 /// 実数 → 整数 (暗黙の変換、キャスト、§6.12.1)。最も近い整数に丸め、ちょうど半分は 0 から遠い方へ。
@@ -155,4 +187,26 @@ pub fn from_f64_round(width: usize, v: f64) -> (RefVec, RefRealToIntStatus) {
 /// `$rtoi` (§20.5)。0 方向へ切り捨てる。
 pub fn from_f64_trunc(width: usize, v: f64) -> (RefVec, RefRealToIntStatus) {
     from_f64(width, v, Rounding::TowardZero)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // plan.md §12 Q-6: 幅 w に収まる範囲は −2^(w−1) ≤ n ≤ 2^w − 1。
+    #[test]
+    fn q6_fits_range() {
+        let b = |n: i128| BigInt::from(n);
+        assert!(fits(0, &b(0)));
+        assert!(!fits(0, &b(1)));
+        assert!(!fits(0, &b(-1)));
+        assert!(fits(1, &b(1)) && fits(1, &b(-1)));
+        assert!(!fits(1, &b(2)) && !fits(1, &b(-2)));
+        assert!(fits(8, &b(255)) && fits(8, &b(-128)));
+        assert!(!fits(8, &b(256)) && !fits(8, &b(-129)));
+        assert!(fits(64, &b((1 << 64) - 1)) && fits(64, &b(-(1 << 63))));
+        assert!(!fits(64, &b(1 << 64)) && !fits(64, &b(-(1 << 63) - 1)));
+        assert!(fits(65, &b(1 << 64)) && fits(65, &b(-(1 << 64))));
+        assert!(!fits(65, &b(1 << 65)) && !fits(65, &b(-(1 << 64) - 1)));
+    }
 }

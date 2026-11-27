@@ -1,7 +1,7 @@
 //! 参照モデルのゴールデンテスト: 実数との変換 (IEEE 1800-2023 §6.12.1, §20.5) と
 //! 表示用フォーマット (§21.2.1、plan.md §3.9)。
 
-use num_bigint::BigUint;
+use num_bigint::{BigInt, BigUint};
 use svsim_logic_ref::*;
 
 fn v(s: &str) -> RefVec {
@@ -17,12 +17,38 @@ fn pow2(n: u32) -> BigUint {
     BigUint::from(1u32) << n
 }
 
+use RefRealToIntStatus::{Exact, NotFinite, Rounded, Wrapped};
+
+/// `from_f64_round` の (値, 状態) を、期待値の (2 の補数の符号付き整数, 状態) と比べる。
+#[track_caller]
+fn check_round(width: usize, x: f64, value: i128, st: RefRealToIntStatus) {
+    let (got, got_st) = from_f64_round(width, x);
+    assert_eq!(
+        got,
+        RefVec::from_bigint(width, &BigInt::from(value)),
+        "round({width}, {x}) の値"
+    );
+    assert_eq!(got_st, st, "round({width}, {x}) の状態");
+}
+
+#[track_caller]
+fn check_trunc(width: usize, x: f64, value: i128, st: RefRealToIntStatus) {
+    let (got, got_st) = from_f64_trunc(width, x);
+    assert_eq!(
+        got,
+        RefVec::from_bigint(width, &BigInt::from(value)),
+        "trunc({width}, {x}) の値"
+    );
+    assert_eq!(got_st, st, "trunc({width}, {x}) の状態");
+}
+
 // §6.12.1: 実数 → 整数は最も近い整数へ、ちょうど半分は 0 から遠い方へ。
 #[test]
 fn s6_12_1_real_to_int_rounding() {
     let r = |x: f64| {
         let (v, st) = from_f64_round(32, x);
-        assert_eq!(st, RefRealToIntStatus::Ok);
+        let expected = if x.fract() == 0.0 { Exact } else { Rounded };
+        assert_eq!(st, expected, "{x}");
         v
     };
     assert_eq!(r(35.7), RefVec::from_i64(32, 36));
@@ -53,7 +79,7 @@ fn s20_5_rtoi() {
 #[test]
 fn s6_12_1_real_to_wide_int() {
     let (x, st) = from_f64_round(128, 2f64.powi(100));
-    assert_eq!(st, RefRealToIntStatus::Ok);
+    assert_eq!(st, Exact);
     assert_eq!(x, from_big(128, &pow2(100)));
     let (x, _) = from_f64_round(200, -(2f64.powi(100)));
     assert_eq!(
@@ -71,6 +97,127 @@ fn real_to_int_not_finite_vcs_v4() {
         assert_eq!(v, RefVec::zeros(8));
         assert_eq!(from_f64_trunc(8, x).1, RefRealToIntStatus::NotFinite);
     }
+}
+
+// test-plan TC43 の表 (§6.12.1 の丸め、§20.5 の $rtoi、plan.md §12 Q-6 の状態)。
+#[test]
+fn tc43_s6_12_1_real_to_int_status_table() {
+    check_round(32, 35.5, 36, Rounded);
+    check_round(32, 35.4, 35, Rounded);
+    check_round(32, 36.0, 36, Exact);
+    // 0 から遠い方へ (偶数丸めではない)
+    check_round(32, -1.5, -2, Rounded);
+    check_round(32, -2.5, -3, Rounded);
+    check_round(32, 2.5, 3, Rounded);
+    check_round(32, 0.5, 1, Rounded);
+    check_round(32, -0.5, -1, Rounded);
+    // floor(x + 0.5) の落とし穴
+    check_round(32, 0.499_999_999_999_999_94, 0, Rounded);
+    check_round(32, 1.499_999_999_999_999_8, 1, Rounded);
+    check_round(32, -0.0, 0, Exact);
+    check_round(32, 5e-324, 0, Rounded);
+    check_round(64, 4_503_599_627_370_495.5, 4_503_599_627_370_496, Rounded);
+    // 符号付きの範囲 / 符号なしの範囲のどちらかに収まれば Exact
+    check_round(8, -1.0, -1, Exact);
+    check_round(8, 255.0, 255, Exact);
+    check_round(8, -128.0, -128, Exact);
+    check_round(8, 254.6, 255, Rounded);
+    // 丸めた後に溢れたら Wrapped (Rounded より優先。Q-6)
+    check_round(8, 255.5, 0, Wrapped);
+    check_round(8, 300.0, 44, Wrapped);
+    check_round(8, -129.0, 0x7f, Wrapped);
+    check_round(64, 1e20, 7_766_279_631_452_241_920, Wrapped);
+    check_round(128, 1e20, 100_000_000_000_000_000_000, Exact);
+    let (x, st) = from_f64_round(128, 2f64.powi(100));
+    assert_eq!((x, st), (from_big(128, &pow2(100)), Exact));
+    let (x, st) = from_f64_round(128, -(2f64.powi(100)));
+    assert_eq!((x, st), (from_big(128, &(pow2(128) - pow2(100))), Exact));
+    // 1e300 の正確な整数値 (997 ビット)
+    let (x, st) = from_f64_round(1100, 1e300);
+    assert_eq!(st, Exact);
+    let n = x.to_biguint().unwrap();
+    assert_eq!(n.bits(), 997);
+    assert_eq!(to_f64(&x, false), 1e300);
+    for nf in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        check_round(32, nf, 0, NotFinite);
+    }
+    // $rtoi: 小数部を捨てたものは Rounded (STATUS の決定)
+    check_trunc(32, 35.9, 35, Rounded);
+    check_trunc(32, -35.9, -35, Rounded);
+    check_trunc(32, -0.5, 0, Rounded);
+    check_trunc(32, 7.0, 7, Exact);
+    check_trunc(8, 256.7, 0, Wrapped);
+    check_trunc(32, f64::NAN, 0, NotFinite);
+}
+
+// Q-6 の範囲の境界: 幅 1。範囲は −1 ≤ n ≤ 1。
+#[test]
+fn q6_real_to_int_status_width1() {
+    check_round(1, 0.0, 0, Exact);
+    check_round(1, 1.0, 1, Exact);
+    check_round(1, -1.0, -1, Exact);
+    check_round(1, 0.5, 1, Rounded);
+    check_round(1, -0.5, -1, Rounded);
+    check_round(1, 2.0, 0, Wrapped);
+    check_round(1, -2.0, 0, Wrapped);
+    check_round(1, 1.5, 0, Wrapped);
+    check_round(1, -1.5, 0, Wrapped);
+    check_trunc(1, 1.9, 1, Rounded);
+    check_trunc(1, -1.9, -1, Rounded);
+    check_trunc(1, 2.5, 0, Wrapped);
+    check_trunc(1, -2.5, 0, Wrapped);
+}
+
+// Q-6 の範囲の境界: 幅 64。範囲は −2^63 ≤ n ≤ 2^64 − 1。
+#[test]
+fn q6_real_to_int_status_width64() {
+    let p64 = 2f64.powi(64);
+    let p63 = 2f64.powi(63);
+    // 2^64 より小さい最大の f64 は 2^64 − 2048
+    check_round(64, p64 - 2048.0, (1i128 << 64) - 2048, Exact);
+    check_round(64, p64, 0, Wrapped);
+    check_trunc(64, p64, 0, Wrapped);
+    check_round(64, -p63, -(1i128 << 63), Exact);
+    // −2^63 より小さい最大の f64 は −2^63 − 2048。切り詰めると 2^63 − 2048
+    check_round(64, -p63 - 2048.0, (1i128 << 63) - 2048, Wrapped);
+    check_round(64, -0.75, -1, Rounded);
+    check_trunc(64, 1e19, 10_000_000_000_000_000_000, Exact);
+}
+
+// Q-6 の範囲の境界: 幅 65 以上 (多倍長)。幅 65 の範囲は −2^64 ≤ n ≤ 2^65 − 1。
+#[test]
+fn q6_real_to_int_status_width65_and_wider() {
+    let p64 = 2f64.powi(64);
+    let p65 = 2f64.powi(65);
+    check_round(65, p64, 1i128 << 64, Exact);
+    check_round(65, p65 - 4096.0, (1i128 << 65) - 4096, Exact);
+    check_round(65, p65, 0, Wrapped);
+    check_round(65, -p64, -(1i128 << 64), Exact);
+    // −2^64 − 4096 → 2^65 − 2^64 − 4096 = 2^64 − 4096
+    check_round(65, -p64 - 4096.0, (1i128 << 64) - 4096, Wrapped);
+    // 幅 128: 2^127 は符号なしの範囲、−2^127 は符号付きの範囲
+    let p127 = 2f64.powi(127);
+    let p128 = 2f64.powi(128);
+    let (x, st) = from_f64_round(128, p127);
+    assert_eq!((x, st), (from_big(128, &pow2(127)), Exact));
+    let (x, st) = from_f64_round(128, -p127);
+    assert_eq!((x, st), (from_big(128, &pow2(127)), Exact));
+    let (x, st) = from_f64_round(128, p128);
+    assert_eq!((x, st), (RefVec::zeros(128), Wrapped));
+    let (x, st) = from_f64_trunc(129, p128 + 2f64.powi(76));
+    assert_eq!((x, st), (from_big(129, &(pow2(128) + pow2(76))), Exact));
+    // 小さい値の丸めは幅によらない
+    check_round(200, -2.5, -3, Rounded);
+    check_trunc(200, -2.5, -2, Rounded);
+}
+
+// 幅 0 の dst: 0 だけが収まる (Q-6 の延長。plan に記載なし)。
+#[test]
+fn q6_real_to_int_status_width0() {
+    assert_eq!(from_f64_round(0, 0.0), (RefVec::zeros(0), Exact));
+    assert_eq!(from_f64_round(0, 0.4), (RefVec::zeros(0), Rounded));
+    assert_eq!(from_f64_round(0, 1.0), (RefVec::zeros(0), Wrapped));
+    assert_eq!(from_f64_trunc(0, -0.9), (RefVec::zeros(0), Rounded));
 }
 
 // §6.12.1, §20.5: 整数 → 実数。最近接偶数丸めで 1 回だけ丸める。
