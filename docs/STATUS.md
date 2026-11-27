@@ -13,7 +13,10 @@
 | M0-T9 | 参照モデル svsim-logic-ref (波2、独立実装) | implementer (別個体) | done |
 | M0-T10 | ソースマップ・診断 (波2) | implementer | done |
 | M0-T12 | コーパスマネージャ雛形 (波2) | implementer | done |
-| M0-T3b/T4/T6/T2 | 波3 | implementer | todo |
+| M0-T3b | words/abi/diff_core/no_alloc_core + レビュー minor (波3) | implementer | doing |
+| M0-T4 | ビット演算・リダクション・論理・比較・?:・エッジ (波3) | implementer | doing |
+| M0-T6 | シフト・幅変更・連結・選択・$clog2 (波3) | implementer | doing |
+| M0-T2 + T12fix | CI・deny.toml + コーパスのレビュー修正 (波3) | implementer | doing |
 | M0-T5/T7/T8/T13 | 波4 | implementer | todo |
 | M0-T11 | 波5 | implementer | todo |
 | M0-TR | テスト実行 | test-runner | todo |
@@ -41,3 +44,8 @@
 | 2026-11-27 | proptest 回帰ファイル | proptest 既定 (テストファイル隣の `tests/<name>.proptest-regressions`) を採用しコミットする | マネージャ |
 | 2026-11-27 | M0 Q-1〜Q-22 | plan.md v2.1 §12 の回答を採用 (要ユーザ確認なし)。注意: Q-6 の RealToIntStatus は4種 (Exact/Rounded/Wrapped/NotFinite) だが参照モデルは2種 → T8 着手時に参照モデルも合わせる | マネージャ |
 | 2026-11-27 | test-plan v2 解釈 | from_f64_trunc で小数部を捨てたら Rounded / alloc(0, align) は整列オフセットを返し次位置は進めない、を採用 | マネージャ |
+| 2026-11-27 | 波2レビュー | T3a/T9/T10 承認、T12 修正後承認 (major: ロック形式を created_unix= に)。T12 修正は波3で T2 と同じエージェントが実施 | マネージャ |
+| 2026-11-27 | T12 追加修正 | ロックに File::try_lock (flock) を併用、git に protocol 許可リスト (https のみ、テスト時 file)、マニフェスト未検出は終了コード 1 | マネージャ |
+| 2026-11-27 | T3b 範囲拡大 | tests/common に RefLogic/bool/Edge 用の比較補助を追加、L64::bit に debug_assert、Scratch は「公開カーネルは Scratch、内部はスライス」方針を doc 化 + split_words 相当を追加。scalar.rs/scratch.rs/tests/common/mod.rs を範囲に含める | マネージャ |
+| 2026-11-27 | サイズなし10進 2^31〜2^32-1 | 参照モデルの現挙動 (32bit 符号付き、負値になる) を暫定採用、V-11 で VCS 確認 | マネージャ |
+| 2026-11-27 | リテラル先頭の `_` | 文法どおりエラー (T7 も同じにする) | マネージャ |
