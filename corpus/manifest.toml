@@ -1,0 +1,18 @@
+# sv-sim のテストコーパスのマニフェスト (docs/milestones/M0/plan.md §7.1)。
+# 外部のテストスイートはリポジトリに取り込まず、`cargo corpus fetch` で取得する (CLAUDE.md §3)。
+# キャッシュの場所: $SVSIM_CORPUS_CACHE (未設定なら ~/.cache/svsim/corpus)。配置は <cache>/<name>/<rev>/。
+version = 1
+
+[[entry]]
+name = "sv-tests"
+description = "CHIPS Alliance sv-tests: IEEE 1800 の章別テスト"
+license = "ISC"
+tags = ["standard"]
+[entry.source]
+git = "https://github.com/chipsalliance/sv-tests"
+rev = "7274242bcf99a2f6f8282493d0200c92eb87d347"   # 2026-11-27 時点の HEAD。必ず 40 桁のコミット ID
+submodules = []                                   # M0 では取得しない (third_party のコアや UVM は後で)
+sparse = []                                       # 空なら全体を取得する
+[entry.discover]
+kind = "sv-tests"                                 # アダプタ: sv-tests のメタデータを解釈する
+root = "tests"
