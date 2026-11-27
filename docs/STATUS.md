@@ -22,10 +22,11 @@
 | M0-T8 | 実数変換・表示フォーマット (波4) | implementer | done |
 | M0-T13 | コーパス段階評価 + CI corpus-fetch + 波3 nit (波4) | implementer | done |
 | M0-T11 | インターン・アリーナ (波5) | implementer | done |
-| M0-T14 | 整理 (改名・補助統合・正規化修正) (波5) | implementer | doing |
+| M0-T14 | 整理 (改名・補助統合・正規化修正) (波5) | implementer | done |
+| M0-CR5 | 波5 コードレビュー (T11/T13b/T14) | code-reviewer | doing |
 | M0-T13b | コーパスのパス安全性修正 (波4レビュー) | implementer | done |
 | M0-T9b | 参照モデル RealToIntStatus 4種化 (本体を読まない別個体) | implementer | done |
-| M0-TR | テスト実行 | test-runner | todo |
+| M0-TR | テスト実行 (test-plan v2 全 82 項目) | test-runner | doing |
 
 ## 決定事項ログ
 | 日付 | 項目 | 決定 | 決定者 |
@@ -74,3 +75,4 @@
 | 2026-11-27 | svsim-common のテスト | proptest は dev-dependency に追加せず、決定的 xorshift で代用 | マネージャ |
 | 2026-11-27 | 波4レビュー | T5/T7/T8/T9b 承認、T13 修正後承認 (minor: 明示 :files: の外部パス、--json の絶対パス)。レビュアの独立モデル照合: 算術 6万件・実数 80万件・log10 定数 全件で不一致 0。修正は M0-T13b | マネージャ |
 | 2026-11-27 | M1 への持ち越し | コーパス runner はファイルを開く時にシンボリックリンクでチェックアウト外に出ないか確認する (T13b の検査は字句のみ) | マネージャ |
+| 2026-11-27 | T14 | Logic::not (1bit, const fn) は固有メソッドのまま。BitVec の bool 版は bit_eq/bit_ne。fmt 幅0 dst の状態は本体・参照・Q-6 の3者一致 | マネージャ |
