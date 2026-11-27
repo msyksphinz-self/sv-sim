@@ -26,7 +26,8 @@
 | M0-CR5 | 波5 コードレビュー (T11/T13b/T14) | code-reviewer | done |
 | M0-T13b | コーパスのパス安全性修正 (波4レビュー) | implementer | done |
 | M0-T9b | 参照モデル RealToIntStatus 4種化 (本体を読まない別個体) | implementer | done |
-| M0-TR | テスト実行 (test-plan v2 全 82 項目) | test-runner | doing |
+| M0-TR | テスト実行 (合格 23/26、L-2 不合格、A-2/K-6 未実施) | test-runner | done |
+| M0-T15 | テスト不足・L-2 修正、CI トリガ修正 | implementer | doing |
 
 ## 決定事項ログ
 | 日付 | 項目 | 決定 | 決定者 |
@@ -77,6 +78,8 @@
 | 2026-11-27 | M1 への持ち越し | コーパス runner はファイルを開く時にシンボリックリンクでチェックアウト外に出ないか確認する (T13b の検査は字句のみ) | マネージャ |
 | 2026-11-27 | T14 | Logic::not (1bit, const fn) は固有メソッドのまま。BitVec の bool 版は bit_eq/bit_ne。fmt 幅0 dst の状態は本体・参照・Q-6 の3者一致 | マネージャ |
 | 2026-11-27 | 波5レビュー | T11/T14 承認、T13b 修正後承認 (minor のみ)。汚れた dst で層2全カーネル 5246 件合格、T14 前後で出力ハッシュ 7952 件完全一致 | マネージャ |
+| 2026-11-27 | CI トリガ | T13 で push を main 限定にした結果、作業ブランチで CI が走らなくなっていた → 全ブランチに戻す (T15)。corpus-fetch は workflow_dispatch でも実行 | マネージャ |
+| 2026-11-27 | L64::bit の範囲外 | 層1 (JIT 仕様・ホットパス) は debug_assert のみで可。Q-1 の「release でも panic」は層2/層3 の API に適用 | マネージャ |
 
 ## M1 に持ち越す作業 (バックログ)
 | 項目 | 由来 |
