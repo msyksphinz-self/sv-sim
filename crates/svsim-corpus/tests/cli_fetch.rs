@@ -38,7 +38,11 @@ fn write_manifest(fx: &Fixture, text: &str) -> String {
 fn list_shows_default_and_extra_entries() {
     let fx = Fixture::new();
     let m = write_manifest(&fx, &fx.manifest_toml("demo", &fx.rev1, ""));
-    let o = corpus(fx.tmp.path(), &fx.cache(), &["list", "--manifest", &m]);
+    let o = corpus(
+        fx.tmp.path(),
+        &fx.cache(),
+        &["list", "--manifest", &m, "--allow-file-protocol"],
+    );
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     let out = stdout(&o);
     let lines: Vec<&str> = out.lines().collect();
@@ -64,7 +68,14 @@ fn fetch_then_offline_via_cli() {
     let o = corpus(
         cwd,
         &cache,
-        &["fetch", "demo", "--offline", "--manifest", &m],
+        &[
+            "fetch",
+            "demo",
+            "--offline",
+            "--manifest",
+            &m,
+            "--allow-file-protocol",
+        ],
     );
     assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
     assert!(stderr(&o).contains("not in the cache"), "{}", stderr(&o));
@@ -84,12 +95,23 @@ fn fetch_then_offline_via_cli() {
     let o = corpus(
         cwd,
         &cache,
-        &["fetch", "demo", "--offline", "--manifest", &m],
+        &[
+            "fetch",
+            "demo",
+            "--offline",
+            "--manifest",
+            &m,
+            "--allow-file-protocol",
+        ],
     );
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     assert!(stdout(&o).starts_with("demo: cached "), "{}", stdout(&o));
 
-    let o = corpus(cwd, &cache, &["list", "--manifest", &m]);
+    let o = corpus(
+        cwd,
+        &cache,
+        &["--allow-file-protocol", "list", "--manifest", &m],
+    );
     assert!(
         stdout(&o).contains(&format!("demo\t{}\tcached\t", fx.rev1)),
         "{}",
@@ -132,7 +154,11 @@ fn bad_manifests_are_reported() {
     ];
     for (text, needle) in cases {
         let m = write_manifest(&fx, &text);
-        let o = corpus(fx.tmp.path(), &fx.cache(), &["list", "--manifest", &m]);
+        let o = corpus(
+            fx.tmp.path(),
+            &fx.cache(),
+            &["list", "--manifest", &m, "--allow-file-protocol"],
+        );
         assert_eq!(o.status.code(), Some(1), "{text}");
         assert!(stderr(&o).contains(needle), "{needle}: {}", stderr(&o));
     }
@@ -142,6 +168,22 @@ fn bad_manifests_are_reported() {
         &["list", "--manifest", "/nonexistent/manifest.toml"],
     );
     assert_eq!(o.status.code(), Some(1));
+}
+
+// マネージャ決定: file:// の URL はテスト用のフラグが無ければマニフェストの誤り (終了コード 1)
+#[test]
+fn file_url_manifest_requires_flag() {
+    let fx = Fixture::new();
+    let m = write_manifest(&fx, &fx.manifest_toml("demo", &fx.rev1, ""));
+    for args in [
+        vec!["list", "--manifest", &m],
+        vec!["fetch", "demo", "--manifest", &m],
+    ] {
+        let o = corpus(fx.tmp.path(), &fx.cache(), &args);
+        assert_eq!(o.status.code(), Some(1), "{args:?}");
+        assert!(stderr(&o).contains("file://"), "{}", stderr(&o));
+    }
+    assert!(!fx.cache().exists());
 }
 
 // K-5: 生きているプロセスのロックではエラーになり、--force-unlock で取り直せる
@@ -154,7 +196,7 @@ fn locked_entry_via_cli() {
     // このテストのプロセス (生きている) の PID
     std::fs::write(
         lock_dir.join(".lock"),
-        format!("pid={}\ncreated=1\n", std::process::id()),
+        format!("pid={}\ncreated_unix=1\n", std::process::id()),
     )
     .unwrap();
     let args = ["--manifest", &m, "fetch", "demo", "--allow-file-protocol"];

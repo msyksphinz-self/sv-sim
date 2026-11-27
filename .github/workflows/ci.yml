@@ -1,0 +1,132 @@
+# sv-sim CI (docs/milestones/M0/plan.md §6、タスク M0-T2)。
+#
+# - サードパーティの action はコミット SHA で固定し、コメントにタグを書く (決定 U-5)。
+#   SHA は各リポジトリのタグから `git ls-remote --tags` で確認した (2026-11-27)。
+# - ツールチェーンは rust-toolchain.toml に従う (rustup がファイルを読んで導入する)。
+# - M0 は Linux (ubuntu-latest) だけで回す。
+# - `corpus-fetch` ジョブは M0-T13 で追加する。
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # proptest-long を毎日 (UTC 18:00 = JST 03:00) 実行する
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  fmt:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo build --workspace --locked
+      # proptest は既定の件数。コーパスのテストは一時ディレクトリの file:// リポジトリを使い、ネットワークに出ない
+      - run: cargo test --workspace --locked
+
+  doc:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  deny:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show
+      # cargo-deny の版も固定する
+      - uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
+        with:
+          tool: cargo-deny@0.22.1
+      # 許可するライセンスなどは deny.toml (R-25)
+      - run: cargo deny --locked check licenses bans sources
+
+  proptest-long:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: proptest (100000 cases)
+        run: cargo test -p svsim-logic --release --locked
+        env:
+          PROPTEST_CASES: "100000"
+      - name: Wide-value smoke tests (#[ignore])
+        run: cargo test -p svsim-logic --release --locked -- --ignored

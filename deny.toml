@@ -1,0 +1,40 @@
+# cargo-deny の設定 (docs/milestones/M0/plan.md §6、タスク M0-T2)。
+# CI では `cargo deny --locked check licenses bans sources` を実行する。
+#
+# 許可するライセンスは、Cargo.lock に現れる依存が満たせる最小限にする (R-25)。
+# 2026-11-27 の Cargo.lock では:
+#   - ほぼ全部が "MIT OR Apache-2.0" 系 (MIT か Apache-2.0 で満たせる)
+#   - unicode-ident: "(MIT OR Apache-2.0) AND Unicode-3.0" → Unicode-3.0 が要る
+#   - memchr / walkdir / same-file / winapi-util: "Unlicense OR MIT" → MIT で満たす
+#     (Unlicense は単独では許可しない)
+#   - linux-raw-sys / rustix: "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT" → MIT で満たす
+#   - r-efi: "MIT OR Apache-2.0 OR LGPL-2.1-or-later" → MIT で満たす
+# 依存を追加してライセンスが足りなくなったら、ここに足す前にマネージャに相談する。
+
+[graph]
+all-features = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+
+[licenses.private]
+# workspace 内の crate (publish していない) もライセンスを検査する
+ignore = false
+
+[bans]
+# 重複した版は CI を落とさずに警告だけにする
+multiple-versions = "warn"
+# workspace 内の path 依存 (version 付き) 以外のワイルドカードは不可
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -3,10 +3,23 @@
 //! - キャッシュの場所は `$SVSIM_CORPUS_CACHE`。未設定なら `$HOME/.cache/svsim/corpus`。
 //! - 配置は `<cache>/<name>/<rev>/`。完了印は `<cache>/<name>/<rev>/.svsim-complete`。
 //! - 取得中の一時ディレクトリは `<cache>/<name>/.tmp-<rev>-<pid>`。
-//! - 排他は `<cache>/<name>/.lock` を `create_new` で作って行う。中身は PID と作成時刻 (R-18)。
+//! - 排他は `<cache>/<name>/.lock` で行う (R-18)。詳細は [`acquire_lock`]。
+//!
+//! # ロックファイルの形式 (plan.md §12 Q-20)
+//!
+//! 2 行のテキスト (各行は LF で終わる):
+//!
+//! ```text
+//! pid=<ロックを取ったプロセスの PID (10 進)>
+//! created_unix=<作成時刻。UNIX 時刻の秒 (10 進)>
+//! ```
+//!
+//! 読むときは、古い形式の `created=<秒>` も `created_unix` として受け付ける。知らない行は無視する。
+//! `pid` か作成時刻が無い、または 10 進の数として読めないロックは「解析できない」ものとして扱い、
+//! 持ち主が生きているか判断できないので取り除かずにエラーにする (`--force-unlock` を案内する)。
 
-use std::fs;
-use std::io::{ErrorKind, Write};
+use std::fs::{self, File, TryLockError};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -88,45 +101,58 @@ impl CacheLayout {
     }
 }
 
-/// ロックファイルの中身。
+/// ロックファイルの中身 (形式はモジュールの doc を参照)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockInfo {
     /// ロックを取ったプロセスの PID。
     pub pid: u32,
     /// 作成時刻 (UNIX 時刻の秒)。
-    pub created: u64,
+    pub created_unix: u64,
 }
 
 impl LockInfo {
     fn current() -> LockInfo {
         LockInfo {
             pid: std::process::id(),
-            created: SystemTime::now()
+            created_unix: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
         }
     }
 
-    /// ロックファイルに書く形式 (`pid=<pid>\ncreated=<secs>\n`)。
+    /// ロックファイルに書く形式 (`pid=<pid>\ncreated_unix=<secs>\n`)。
     pub fn to_text(&self) -> String {
-        format!("pid={}\ncreated={}\n", self.pid, self.created)
+        format!("pid={}\ncreated_unix={}\n", self.pid, self.created_unix)
     }
 
-    /// ロックファイルの中身を解析する。形式が違えば `None`。
+    /// ロックファイルの中身を解析する。解析できなければ `None`。
+    ///
+    /// 古い形式の `created=<secs>` も受け付ける (`created_unix=` があればそちらを使う)。
     pub fn parse(text: &str) -> Option<LockInfo> {
+        fn dec<T: std::str::FromStr>(v: &str) -> Option<T> {
+            let v = v.trim();
+            // `+1` などを受け付けないよう、10 進の数字だけに限る
+            if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            v.parse().ok()
+        }
         let mut pid = None;
-        let mut created = None;
+        let mut created_unix = None;
+        let mut created_legacy = None;
         for line in text.lines() {
             if let Some(v) = line.strip_prefix("pid=") {
-                pid = v.trim().parse().ok();
+                pid = Some(dec(v)?);
+            } else if let Some(v) = line.strip_prefix("created_unix=") {
+                created_unix = Some(dec(v)?);
             } else if let Some(v) = line.strip_prefix("created=") {
-                created = v.trim().parse().ok();
+                created_legacy = Some(dec(v)?);
             }
         }
         Some(LockInfo {
             pid: pid?,
-            created: created?,
+            created_unix: created_unix.or(created_legacy)?,
         })
     }
 }
@@ -143,11 +169,13 @@ pub fn process_alive(pid: u32) -> bool {
     }
 }
 
-/// 取得したロック。破棄すると (このプロセスが作った) ロックファイルを消す。
+/// 取得したロック。破棄すると (このプロセスが作った) ロックファイルを消し、flock を外す。
 #[derive(Debug)]
 pub struct LockGuard {
     path: PathBuf,
     info: LockInfo,
+    /// flock を持っている開いたファイル。閉じると flock が外れる。
+    file: File,
 }
 
 impl LockGuard {
@@ -164,8 +192,10 @@ impl LockGuard {
 
 impl Drop for LockGuard {
     fn drop(&mut self) {
-        // 自分の書いたロックのときだけ消す (--force-unlock 等で他者のものに替わっていたら触らない)
-        if let Ok(text) = fs::read_to_string(&self.path)
+        // flock を持ったまま消す。パスが今もこのファイルを指し、中身が自分の書いたものときだけ
+        // (--force-unlock で別のロックに替わっていたら触らない)。flock は `file` を閉じたときに外れる。
+        if same_file(&self.file, &self.path)
+            && let Ok(text) = fs::read_to_string(&self.path)
             && LockInfo::parse(&text).as_ref() == Some(&self.info)
         {
             let _ = fs::remove_file(&self.path);
@@ -182,99 +212,121 @@ pub struct LockOptions {
     pub alive: Option<fn(u32) -> bool>,
 }
 
-/// `lock_path` のロックを取る (R-18)。
+/// `lock_path` のロックを取る (R-18)。待たない。
 ///
-/// - ロックが無ければ `create_new` で作り、PID と作成時刻を書く。
-/// - ロックがあり、書かれた PID のプロセスが存在しなければ、古いロックとして取り除いて取り直す。
-/// - `force_unlock` なら、持ち主に関係なく取り除いて取り直す。
-/// - それ以外は待たずに [`Error::Locked`] を返す。
+/// 排他の本体は flock ([`File::try_lock`]) で、ロックファイルの中身 (PID) の判定は補助に使う:
+///
+/// 1. `lock_path` を開き (無ければ作り)、flock を待たずに取る。
+///    - 取れなければ、別のプロセスが持っている。`force_unlock` ならファイルを消して作り直し、
+///      それ以外は [`Error::Locked`] を返す。
+/// 2. 取れたら、`lock_path` が今もそのファイルを指しているか確かめる (取る前に別のプロセスが
+///    消して作り直していたら、1 からやり直す)。
+/// 3. 中身を確かめる (`force_unlock` なら省く)。
+///    - 空: 作ったばかりか、書く前に異常終了した。取ってよい。
+///    - 解析でき、その PID のプロセスが存在しない: 古いロック。上書きして取る。
+///    - 解析でき、その PID のプロセスが存在する: flock を使わない版の持ち主かもしれないので
+///      [`Error::Locked`] (PID の再利用で誤ることがあるが、その場合は `--force-unlock` で解く)。
+///    - 解析できない: 判断できないので [`Error::Locked`] (Q-20)。
+/// 4. 自分の PID と作成時刻を書く。
+///
+/// 古いロックは取り除かずに flock を持ったまま上書きするので、複数のプロセスが同時に
+/// 古いロックを見つけても、取れるのは 1 つだけになる。
 pub fn acquire_lock(lock_path: &Path, opts: LockOptions) -> Result<LockGuard, Error> {
     let alive = opts.alive.unwrap_or(process_alive);
-    // 古いロックの除去と作成の競合に備えて、数回だけ試す
-    for _ in 0..4 {
-        match try_create(lock_path) {
-            Ok(guard) => return Ok(guard),
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(Error::io(lock_path, e)),
+    let io = |e| Error::io(lock_path, e);
+    // 他のプロセスが消して作り直すのと競合したときに備えて、数回だけ試す
+    for _ in 0..8 {
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)
+            .map_err(io)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                if opts.force_unlock {
+                    // 持ち主の flock は消したファイルに残るだけで、新しいファイルには効かない
+                    drop(file);
+                    match fs::remove_file(lock_path) {
+                        Ok(()) => {}
+                        Err(e) if e.kind() == ErrorKind::NotFound => {}
+                        Err(e) => return Err(io(e)),
+                    }
+                    continue;
+                }
+                return Err(Error::Locked {
+                    path: lock_path.to_path_buf(),
+                    holder: read_holder(lock_path),
+                });
+            }
+            Err(TryLockError::Error(e)) => return Err(io(e)),
         }
-        let text = match fs::read_to_string(lock_path) {
-            Ok(t) => t,
-            // 読む前に消えた: もう一度作ってみる
-            Err(e) if e.kind() == ErrorKind::NotFound => continue,
-            Err(e) => return Err(Error::io(lock_path, e)),
-        };
-        let info = LockInfo::parse(&text);
-        let stale = match &info {
-            Some(i) => !alive(i.pid),
-            // 中身が読めない (書き込みの途中か、異常終了した): 持ち主が分からないので取り除かない
-            None => false,
-        };
-        if !(stale || opts.force_unlock) {
-            return Err(Error::Locked {
-                path: lock_path.to_path_buf(),
-                holder: info,
-            });
+        if !same_file(&file, lock_path) {
+            continue;
         }
-        remove_if_unchanged(lock_path, &text)?;
+        let mut text = String::new();
+        file.read_to_string(&mut text).map_err(io)?;
+        if !text.is_empty() && !opts.force_unlock {
+            match LockInfo::parse(&text) {
+                // 古いロック: 上書きする
+                Some(i) if !alive(i.pid) => {}
+                holder => {
+                    return Err(Error::Locked {
+                        path: lock_path.to_path_buf(),
+                        holder,
+                    });
+                }
+            }
+        }
+        let info = LockInfo::current();
+        file.set_len(0)
+            .and_then(|()| file.seek(SeekFrom::Start(0)).map(|_| ()))
+            .and_then(|()| file.write_all(info.to_text().as_bytes()))
+            .and_then(|()| file.sync_all())
+            .map_err(io)?;
+        return Ok(LockGuard {
+            path: lock_path.to_path_buf(),
+            info,
+            file,
+        });
     }
     Err(Error::Locked {
         path: lock_path.to_path_buf(),
-        holder: fs::read_to_string(lock_path)
-            .ok()
-            .and_then(|t| LockInfo::parse(&t)),
+        holder: read_holder(lock_path),
     })
 }
 
-fn try_create(lock_path: &Path) -> std::io::Result<LockGuard> {
-    let info = LockInfo::current();
-    let mut f = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(lock_path)?;
-    let res = f
-        .write_all(info.to_text().as_bytes())
-        .and_then(|_| f.sync_all());
-    if let Err(e) = res {
-        drop(f);
-        let _ = fs::remove_file(lock_path);
-        return Err(e);
+fn read_holder(lock_path: &Path) -> Option<LockInfo> {
+    fs::read_to_string(lock_path)
+        .ok()
+        .and_then(|t| LockInfo::parse(&t))
+}
+
+/// 開いているファイル `file` と、パス `path` が指すファイルが同じか。
+#[cfg(unix)]
+fn same_file(file: &File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (file.metadata(), fs::metadata(path)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
     }
-    Ok(LockGuard {
-        path: lock_path.to_path_buf(),
-        info,
-    })
 }
 
-/// ロックファイルの中身が `expected` のままなら取り除く。
+/// 開いているファイル `file` と、パス `path` が指すファイルが同じか。
 ///
-/// 古いロックを 2 つのプロセスが同時に見つけた場合に、相手が取り直した新しいロックを消さないよう、
-/// いったん自分専用の名前に `rename` してから中身を確かめる。違っていたら元に戻す。
-fn remove_if_unchanged(lock_path: &Path, expected: &str) -> Result<(), Error> {
-    let aside = lock_path.with_file_name(format!(
-        "{}.stale-{}",
-        lock_path
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        std::process::id()
-    ));
-    match fs::rename(lock_path, &aside) {
-        Ok(()) => {}
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(Error::io(lock_path, e)),
-    }
-    let now = fs::read_to_string(&aside).unwrap_or_default();
-    if now != expected {
-        // 別のプロセスの新しいロックだった。元の名前に戻す (既に別のロックがあれば戻さない)
-        let _ = fs::hard_link(&aside, lock_path);
-    }
-    let _ = fs::remove_file(&aside);
-    Ok(())
+/// Unix 以外では確かめる手段を使わず、パスが存在すれば同じとみなす
+/// (Windows では開いているファイルは普通は消せないので、作り直しの競合は起きにくい)。
+#[cfg(not(unix))]
+fn same_file(_file: &File, path: &Path) -> bool {
+    path.exists()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
 
     fn dead(_: u32) -> bool {
         false
@@ -310,16 +362,51 @@ mod tests {
         );
     }
 
+    // Q-20: 形式は `pid=<10進>\ncreated_unix=<秒>\n`
     #[test]
-    fn lock_info_roundtrip() {
+    fn lock_info_format_and_roundtrip() {
         let i = LockInfo {
             pid: 42,
-            created: 1_700_000_000,
+            created_unix: 1_700_000_000,
         };
+        assert_eq!(i.to_text(), "pid=42\ncreated_unix=1700000000\n");
         assert_eq!(LockInfo::parse(&i.to_text()), Some(i));
-        assert_eq!(LockInfo::parse(""), None);
-        assert_eq!(LockInfo::parse("pid=x\ncreated=1\n"), None);
-        assert_eq!(LockInfo::parse("pid=1\n"), None);
+    }
+
+    #[test]
+    fn lock_info_accepts_legacy_created() {
+        let want = Some(LockInfo {
+            pid: 7,
+            created_unix: 9,
+        });
+        assert_eq!(LockInfo::parse("pid=7\ncreated=9\n"), want);
+        // CRLF や前後の空白、知らない行は許す
+        assert_eq!(LockInfo::parse("pid= 7 \r\nhost=x\r\ncreated=9\r\n"), want);
+        // 両方あれば created_unix を使う
+        assert_eq!(
+            LockInfo::parse("pid=7\ncreated=1\ncreated_unix=9\n"),
+            want.clone()
+        );
+        assert_eq!(LockInfo::parse("created_unix=9\npid=7"), want);
+    }
+
+    #[test]
+    fn lock_info_rejects_unparsable() {
+        for t in [
+            "",
+            "garbage",
+            "pid=1\n",
+            "created_unix=1\n",
+            "pid=x\ncreated_unix=1\n",
+            "pid=1\ncreated_unix=y\n",
+            "pid=-1\ncreated_unix=1\n",
+            "pid=+1\ncreated_unix=1\n",
+            "pid=0x10\ncreated_unix=1\n",
+            "pid=\ncreated_unix=1\n",
+            "pid=4294967296\ncreated_unix=1\n",
+        ] {
+            assert_eq!(LockInfo::parse(t), None, "{t:?}");
+        }
     }
 
     #[test]
@@ -340,29 +427,41 @@ mod tests {
         let p = d.path().join(".lock");
         let g = acquire_lock(&p, LockOptions::default()).unwrap();
         let text = fs::read_to_string(&p).unwrap();
+        assert!(text.starts_with("pid=") && text.contains("\ncreated_unix="));
         let info = LockInfo::parse(&text).unwrap();
         assert_eq!(info.pid, std::process::id());
         assert_eq!(g.info(), &info);
-        // 生きているプロセス (自分) のロックではエラー (K-5)
-        let e = acquire_lock(&p, LockOptions::default()).unwrap_err();
-        assert!(matches!(e, Error::Locked { .. }), "{e}");
+        // flock を持っているので、PID の判定に関係なくエラー (K-5)
+        let e = acquire_lock(
+            &p,
+            LockOptions {
+                alive: Some(dead),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&e, Error::Locked { holder: Some(h), .. } if h == &info),
+            "{e}"
+        );
         assert!(e.to_string().contains("--force-unlock"), "{e}");
         drop(g);
         assert!(!p.exists());
         let _g = acquire_lock(&p, LockOptions::default()).unwrap();
     }
 
-    // K-5: 存在しない PID のロックは自動で取り除く
+    // K-5: 存在しない PID のロックは自動で取り除く (上書きする)
     #[test]
     fn stale_lock_is_removed() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join(".lock");
-        fs::write(&p, "pid=4294967294\ncreated=1\n").unwrap();
+        fs::write(&p, "pid=4294967294\ncreated_unix=1\n").unwrap();
         // 実際の process_alive で判定する (Linux 以外では生きているとみなすのでエラー)
         let r = acquire_lock(&p, LockOptions::default());
         if cfg!(target_os = "linux") {
             let g = r.unwrap();
             assert_eq!(g.info().pid, std::process::id());
+            assert_eq!(fs::read_to_string(&p).unwrap(), g.info().to_text());
         } else {
             assert!(r.is_err());
         }
@@ -372,6 +471,7 @@ mod tests {
     fn stale_lock_with_injected_liveness() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join(".lock");
+        // 古い形式 (created=) でも PID を読んで判定する
         fs::write(&p, "pid=123\ncreated=1\n").unwrap();
         let e = acquire_lock(
             &p,
@@ -382,7 +482,13 @@ mod tests {
         )
         .unwrap_err();
         match e {
-            Error::Locked { holder, .. } => assert_eq!(holder.unwrap().pid, 123),
+            Error::Locked { holder, .. } => assert_eq!(
+                holder,
+                Some(LockInfo {
+                    pid: 123,
+                    created_unix: 1
+                })
+            ),
             other => panic!("{other}"),
         }
         let g = acquire_lock(
@@ -394,7 +500,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(g.info().pid, std::process::id());
-        // 退避用のファイルが残っていない
+        // ロックファイル以外が残っていない
         let names: Vec<_> = fs::read_dir(d.path())
             .unwrap()
             .map(|e| e.unwrap().file_name())
@@ -402,12 +508,52 @@ mod tests {
         assert_eq!(names, vec![std::ffi::OsString::from(".lock")]);
     }
 
+    // R-18: 古いロックを複数が同時に見つけても、取れるのは 1 つだけ。
+    // flock は開いたファイルごとに効くので、同じプロセスのスレッドでも競合を再現できる。
+    #[test]
+    fn concurrent_stale_lock_takeover_has_single_winner() {
+        const N: usize = 8;
+        for _round in 0..20 {
+            let d = tempfile::tempdir().unwrap();
+            let p = Arc::new(d.path().join(".lock"));
+            fs::write(&*p, "pid=4294967294\ncreated_unix=1\n").unwrap();
+            let start = Arc::new(Barrier::new(N));
+            let hold = Arc::new(Barrier::new(N));
+            let handles: Vec<_> = (0..N)
+                .map(|_| {
+                    let (p, start, hold) = (p.clone(), start.clone(), hold.clone());
+                    std::thread::spawn(move || {
+                        start.wait();
+                        // 全員が「持ち主は死んでいる」と判定する最悪の場合
+                        let r = acquire_lock(
+                            &p,
+                            LockOptions {
+                                alive: Some(dead),
+                                ..Default::default()
+                            },
+                        );
+                        // 全員が試し終わるまでロックを持ち続ける
+                        hold.wait();
+                        r.is_ok()
+                    })
+                })
+                .collect();
+            let wins = handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .filter(|&ok| ok)
+                .count();
+            assert_eq!(wins, 1);
+            assert!(!p.exists(), "lock must be removed by the winner");
+        }
+    }
+
     #[test]
     fn force_unlock_removes_live_lock() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join(".lock");
         // 生きているプロセス (自分) のロック。作成時刻を変えて、新しく取るロックと区別する
-        let live = format!("pid={}\ncreated=1\n", std::process::id());
+        let live = format!("pid={}\ncreated_unix=1\n", std::process::id());
         fs::write(&p, &live).unwrap();
         assert!(acquire_lock(&p, LockOptions::default()).is_err());
         let g = acquire_lock(
@@ -423,6 +569,30 @@ mod tests {
         assert!(!p.exists());
     }
 
+    // flock を持っている相手がいても --force-unlock なら取れる。相手の破棄は新しいロックを消さない
+    #[test]
+    fn force_unlock_overrides_flock_holder() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join(".lock");
+        let old = acquire_lock(&p, LockOptions::default()).unwrap();
+        let new = acquire_lock(
+            &p,
+            LockOptions {
+                force_unlock: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        drop(old);
+        assert!(p.exists());
+        assert_eq!(fs::read_to_string(&p).unwrap(), new.info().to_text());
+        // 新しいロックは flock で有効
+        assert!(acquire_lock(&p, LockOptions::default()).is_err());
+        drop(new);
+        assert!(!p.exists());
+    }
+
+    // Q-20: 解析できないロックは取り除かずにエラー
     #[test]
     fn unparsable_lock_is_not_removed_automatically() {
         let d = tempfile::tempdir().unwrap();
@@ -437,6 +607,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(e, Error::Locked { holder: None, .. }));
+        assert!(e.to_string().contains("--force-unlock"), "{e}");
         assert_eq!(fs::read_to_string(&p).unwrap(), "garbage");
         let _g = acquire_lock(
             &p,
@@ -448,24 +619,45 @@ mod tests {
         .unwrap();
     }
 
+    // 空のロック (作成直後に異常終了した等) は、flock が取れれば取ってよい
+    #[test]
+    fn empty_lock_without_holder_is_taken() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join(".lock");
+        fs::write(&p, "").unwrap();
+        let g = acquire_lock(
+            &p,
+            LockOptions {
+                alive: Some(alive),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&p).unwrap(), g.info().to_text());
+    }
+
     #[test]
     fn guard_does_not_remove_foreign_lock() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join(".lock");
         let g = acquire_lock(&p, LockOptions::default()).unwrap();
-        fs::write(&p, "pid=1\ncreated=2\n").unwrap();
+        fs::write(&p, "pid=1\ncreated_unix=2\n").unwrap();
         drop(g);
-        assert_eq!(fs::read_to_string(&p).unwrap(), "pid=1\ncreated=2\n");
+        assert_eq!(fs::read_to_string(&p).unwrap(), "pid=1\ncreated_unix=2\n");
     }
 
+    // 取る前にファイルが作り直された場合 (flock を取ったファイルがもうパスに無い) は取り直す
+    #[cfg(unix)]
     #[test]
-    fn remove_if_unchanged_restores_changed_lock() {
+    fn same_file_detects_replaced_path() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join(".lock");
-        fs::write(&p, "pid=9\ncreated=9\n").unwrap();
-        remove_if_unchanged(&p, "pid=1\ncreated=1\n").unwrap();
-        assert_eq!(fs::read_to_string(&p).unwrap(), "pid=9\ncreated=9\n");
-        remove_if_unchanged(&p, "pid=9\ncreated=9\n").unwrap();
-        assert!(!p.exists());
+        fs::write(&p, "").unwrap();
+        let f = File::open(&p).unwrap();
+        assert!(same_file(&f, &p));
+        fs::remove_file(&p).unwrap();
+        assert!(!same_file(&f, &p));
+        fs::write(&p, "").unwrap();
+        assert!(!same_file(&f, &p));
     }
 }

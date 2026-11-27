@@ -12,6 +12,10 @@
 //!
 //! 取得したファイルは信頼しない入力として扱い、読むだけにする (リポジトリ内のスクリプトは実行しない)。
 //! 新規に `init` したリポジトリにはフックが無く、さらに `core.hooksPath=/dev/null` で無効にしてある。
+//!
+//! `git` は `-c protocol.allow=never -c protocol.https.allow=always` で実行し、https 以外の
+//! プロトコルを使わせない。`file://` は [`FetchOptions::allow_file_protocol`] (テスト専用) のときだけ許す。
+//! 呼び出し元の環境の `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` / `GIT_ALLOW_PROTOCOL` は引き継がない。
 
 use std::ffi::OsStr;
 use std::fs;
@@ -32,6 +36,8 @@ pub struct FetchOptions {
     /// 既存のロックを持ち主に関係なく取り除く。
     pub force_unlock: bool,
     /// `file://` の取得を許す (`-c protocol.file.allow=always`)。テスト専用。
+    ///
+    /// マニフェストの検証でも `file://` を許す必要がある ([`crate::manifest::ManifestOptions`])。
     pub allow_file_protocol: bool,
     /// 呼び出す `git` コマンド。
     pub git: PathBuf,
@@ -200,11 +206,9 @@ fn clean_leftovers(layout: &CacheLayout) -> Result<(), Error> {
     for ent in rd.flatten() {
         let name = ent.file_name();
         let Some(name) = name.to_str() else { continue };
-        let pid = if let Some(rest) = name.strip_prefix(".tmp-") {
-            rest.rsplit('-').next()
-        } else {
-            name.strip_prefix(".lock.stale-")
-        };
+        let pid = name
+            .strip_prefix(".tmp-")
+            .and_then(|rest| rest.rsplit('-').next());
         let Some(pid) = pid.and_then(|p| p.parse::<u32>().ok()) else {
             continue;
         };
@@ -249,13 +253,27 @@ impl<'a> Git<'a> {
             .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
             .env_remove("GIT_COMMON_DIR")
             .env_remove("GIT_NAMESPACE")
+            // 親から `-c` 相当の設定 (protocol.*.allow 等) を引き継がない
+            .env_remove("GIT_CONFIG_PARAMETERS")
+            .env_remove("GIT_CONFIG_COUNT")
+            // GIT_ALLOW_PROTOCOL は protocol.*.allow の設定より優先されるので消す
+            .env_remove("GIT_ALLOW_PROTOCOL")
             .args(["-c", "core.hooksPath=/dev/null"])
             .args(["-c", "advice.detachedHead=false"])
             .args(["-c", "init.defaultBranch=main"])
+            // 使えるプロトコルは https だけ (ssh, git, http, ext, ローカルパス等は不可)。
+            // サブモジュールの取得にも GIT_CONFIG_PARAMETERS 経由で引き継がれる
+            .args(["-c", "protocol.allow=never"])
+            .args(["-c", "protocol.https.allow=always"])
             .stdin(Stdio::null());
-        if self.allow_file {
-            c.args(["-c", "protocol.file.allow=always"]);
+        // protocol.<name>.allow は protocol.allow より優先されるので、利用者の設定ファイル
+        // (~/.gitconfig 等) で組み込みのプロトコルが許されていても、ここで明示的に禁じる
+        for name in ["ssh", "git", "http", "ext"] {
+            c.arg("-c").arg(format!("protocol.{name}.allow=never"));
         }
+        // file:// はテスト (一時ディレクトリの bare リポジトリ) のときだけ
+        let file = if self.allow_file { "always" } else { "never" };
+        c.arg("-c").arg(format!("protocol.file.allow={file}"));
         c
     }
 
@@ -299,6 +317,7 @@ impl<'a> Git<'a> {
 mod tests {
     use super::*;
     use crate::Manifest;
+    use crate::manifest::ManifestOptions;
 
     const REV: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -306,7 +325,13 @@ mod tests {
         let text = format!(
             "version = 1\n[[entry]]\nname = \"demo\"\nlicense = \"MIT\"\n[entry.source]\ngit = \"file:///x\"\nrev = \"{REV}\"\n[entry.discover]\nkind = \"sv-tests\"\nroot = \"tests\"\n"
         );
-        Manifest::parse_str(&text, "t").unwrap().entries.remove(0)
+        let opts = ManifestOptions {
+            allow_file_urls: true,
+        };
+        Manifest::parse_str_with(&text, "t", opts)
+            .unwrap()
+            .entries
+            .remove(0)
     }
 
     // R-18 (3): rename が失敗しても、最終位置に完了印があれば成功扱い
@@ -351,6 +376,58 @@ mod tests {
         assert!(layout.is_complete());
         let marker = fs::read_to_string(layout.marker_path()).unwrap();
         assert!(marker.contains(&format!("rev={REV}")), "{marker}");
+    }
+
+    /// `-c` で渡す設定の一覧。
+    fn config_args(c: &Command) -> Vec<String> {
+        let args: Vec<String> = c
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        args.windows(2)
+            .filter(|w| w[0] == "-c")
+            .map(|w| w[1].clone())
+            .collect()
+    }
+
+    // R-18 / マネージャ決定: https だけを許し、file はテスト時だけ。親の -c 設定を引き継がない
+    #[test]
+    fn git_command_restricts_protocols() {
+        let d = tempfile::tempdir().unwrap();
+        let mut o = FetchOptions::new(d.path().to_path_buf());
+        let c = Git::new(&o, d.path()).command();
+        let cfg = config_args(&c);
+        for want in [
+            "protocol.allow=never",
+            "protocol.https.allow=always",
+            "protocol.file.allow=never",
+            "protocol.ssh.allow=never",
+            "protocol.git.allow=never",
+            "protocol.http.allow=never",
+            "protocol.ext.allow=never",
+            "core.hooksPath=/dev/null",
+        ] {
+            assert!(cfg.iter().any(|a| a == want), "{want} not in {cfg:?}");
+        }
+        assert!(!cfg.iter().any(|a| a == "protocol.file.allow=always"));
+        let removed: Vec<_> = c
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        for k in [
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_COUNT",
+            "GIT_ALLOW_PROTOCOL",
+            "GIT_DIR",
+        ] {
+            assert!(removed.iter().any(|r| r == k), "{k} not removed");
+        }
+
+        o.allow_file_protocol = true;
+        let cfg = config_args(&Git::new(&o, d.path()).command());
+        assert!(cfg.iter().any(|a| a == "protocol.file.allow=always"));
+        assert!(!cfg.iter().any(|a| a == "protocol.file.allow=never"));
     }
 
     #[test]

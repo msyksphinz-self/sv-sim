@@ -9,11 +9,22 @@ use std::path::Path;
 use git_fixture::{Fixture, commit_all, file_url, git, write};
 use svsim_corpus::cache::{COMPLETE_MARKER, CacheLayout};
 use svsim_corpus::fetch::{FetchOptions, FetchStatus, cached_checkout, fetch_entry};
+use svsim_corpus::manifest::ManifestOptions;
 use svsim_corpus::{Entry, Error, Manifest};
 
+/// テスト用 (`file://` を許す) の設定でマニフェストを解析し、最初のエントリを返す。
+fn parse_entry(text: &str) -> Entry {
+    let opts = ManifestOptions {
+        allow_file_urls: true,
+    };
+    Manifest::parse_str_with(text, "test", opts)
+        .unwrap()
+        .entries
+        .remove(0)
+}
+
 fn entry(fx: &Fixture, rev: &str, extra_source: &str) -> Entry {
-    let m = Manifest::parse_str(&fx.manifest_toml("demo", rev, extra_source), "test").unwrap();
-    m.entries.into_iter().next().unwrap()
+    parse_entry(&fx.manifest_toml("demo", rev, extra_source))
 }
 
 fn opts(fx: &Fixture) -> FetchOptions {
@@ -117,7 +128,7 @@ fn unreachable_source_fails() {
         &file_url(&fx.bare),
         &file_url(&fx.tmp.path().join("missing.git")),
     );
-    let e = Manifest::parse_str(&text, "t").unwrap().entries.remove(0);
+    let e = parse_entry(&text);
     let err = fetch_entry(&e, &opts(&fx)).unwrap_err();
     assert!(matches!(err, Error::Git { .. }), "{err}");
     assert!(entry_dir_names(&fx).is_empty());
@@ -196,7 +207,7 @@ fn submodules_are_fetched_when_listed() {
             &file_url(&fx.bare),
             &file_url(&fx.tmp.path().join("parent.git")),
         );
-    let e = Manifest::parse_str(&text, "t").unwrap().entries.remove(0);
+    let e = parse_entry(&text);
     let out = fetch_entry(&e, &opts(&fx)).unwrap();
     let d = &out.checkout_dir;
     assert!(d.join("tests/t.sv").is_file());
@@ -206,7 +217,7 @@ fn submodules_are_fetched_when_listed() {
 
     // サブモジュールを指定しなければ取得しない
     let text2 = text.replace(r#"submodules = ["third_party/sub"]"#, "");
-    let mut e2 = Manifest::parse_str(&text2, "t").unwrap().entries.remove(0);
+    let mut e2 = parse_entry(&text2);
     e2.name = "demo2".into();
     let out2 = fetch_entry(&e2, &opts(&fx)).unwrap();
     assert!(!out2.checkout_dir.join("third_party/sub/core.sv").exists());
@@ -220,7 +231,7 @@ fn live_lock_blocks_fetch_and_force_unlock_overrides() {
     let layout = CacheLayout::new(&fx.cache(), "demo", &fx.rev1);
     fs::create_dir_all(&layout.entry_dir).unwrap();
     // 自分自身の PID (確実に生きている) で、作成時刻を古くしたロック
-    let live = format!("pid={}\ncreated=1\n", std::process::id());
+    let live = format!("pid={}\ncreated_unix=1\n", std::process::id());
     fs::write(&layout.lock_path, &live).unwrap();
 
     let err = fetch_entry(&e, &opts(&fx)).unwrap_err();
@@ -245,7 +256,7 @@ fn stale_lock_is_removed_automatically() {
     let layout = CacheLayout::new(&fx.cache(), "demo", &fx.rev1);
     fs::create_dir_all(&layout.entry_dir).unwrap();
     // Linux の pid_max は最大 2^22 なので、この PID のプロセスは存在しない
-    fs::write(&layout.lock_path, "pid=4294967294\ncreated=1\n").unwrap();
+    fs::write(&layout.lock_path, "pid=4294967294\ncreated_unix=1\n").unwrap();
     let out = fetch_entry(&e, &opts(&fx)).unwrap();
     assert_eq!(out.status, FetchStatus::Fetched);
     assert_eq!(entry_dir_names(&fx), vec![fx.rev1.clone()]);
@@ -271,6 +282,113 @@ fn leftovers_from_crashed_fetch_are_cleaned() {
     assert!(!out.checkout_dir.join("partial").exists());
     assert!(out.checkout_dir.join("tests/a.sv").is_file());
     assert_eq!(entry_dir_names(&fx), vec![fx.rev1.clone()]);
+}
+
+// 古い形式 (`created=`) のロックも読める。持ち主が生きていればエラー
+#[test]
+fn legacy_lock_format_is_understood() {
+    let fx = Fixture::new();
+    let e = entry(&fx, &fx.rev1, "");
+    let layout = CacheLayout::new(&fx.cache(), "demo", &fx.rev1);
+    fs::create_dir_all(&layout.entry_dir).unwrap();
+    fs::write(
+        &layout.lock_path,
+        format!("pid={}\ncreated=5\n", std::process::id()),
+    )
+    .unwrap();
+    let err = fetch_entry(&e, &opts(&fx)).unwrap_err();
+    match &err {
+        Error::Locked {
+            holder: Some(h), ..
+        } => {
+            assert_eq!(h.pid, std::process::id());
+            assert_eq!(h.created_unix, 5);
+        }
+        other => panic!("{other}"),
+    }
+    assert!(err.to_string().contains("unix time 5"), "{err}");
+}
+
+// 解析できないロックは自動では取り除かない (Q-20)
+#[test]
+fn unparsable_lock_blocks_fetch() {
+    let fx = Fixture::new();
+    let e = entry(&fx, &fx.rev1, "");
+    let layout = CacheLayout::new(&fx.cache(), "demo", &fx.rev1);
+    fs::create_dir_all(&layout.entry_dir).unwrap();
+    fs::write(&layout.lock_path, "pid=?\n").unwrap();
+    let err = fetch_entry(&e, &opts(&fx)).unwrap_err();
+    assert!(matches!(err, Error::Locked { holder: None, .. }), "{err}");
+    assert_eq!(fs::read_to_string(&layout.lock_path).unwrap(), "pid=?\n");
+}
+
+// git は file:// を、テスト用のフラグが無ければ使わない (protocol.file.allow=never)
+#[test]
+fn file_protocol_is_refused_without_flag() {
+    let fx = Fixture::new();
+    let e = entry(&fx, &fx.rev1, "");
+    let mut o = opts(&fx);
+    o.allow_file_protocol = false;
+    let err = fetch_entry(&e, &o).unwrap_err();
+    assert!(matches!(err, Error::Git { .. }), "{err}");
+    assert!(err.to_string().contains("not allowed"), "{err}");
+    assert!(entry_dir_names(&fx).is_empty());
+}
+
+// 親の環境の GIT_CONFIG_PARAMETERS / GIT_ALLOW_PROTOCOL で file:// を許しても効かない
+#[test]
+fn parent_git_config_env_is_not_inherited() {
+    let fx = Fixture::new();
+    // 子プロセスに渡す環境を変えるため、取得を別のプロセス (このテスト自身) で行う
+    let exe = std::env::current_exe().unwrap();
+    let out = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "parent_env_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("SVSIM_TEST_CHILD_URL", file_url(&fx.bare))
+        .env("SVSIM_TEST_CHILD_REV", &fx.rev1)
+        .env("SVSIM_TEST_CHILD_CACHE", fx.cache())
+        .env("GIT_CONFIG_PARAMETERS", "'protocol.file.allow'='always'")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "protocol.allow")
+        .env("GIT_CONFIG_VALUE_0", "always")
+        .env("GIT_ALLOW_PROTOCOL", "file")
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("CHILD-RESULT: refused"), "{text}");
+}
+
+/// [`parent_env_child`] から子プロセスとして呼ばれる。単独では何もしない。
+#[test]
+#[ignore = "helper for parent_git_config_env_is_not_inherited"]
+fn parent_env_child() {
+    let (Some(url), Some(rev), Some(cache)) = (
+        std::env::var_os("SVSIM_TEST_CHILD_URL"),
+        std::env::var("SVSIM_TEST_CHILD_REV").ok(),
+        std::env::var_os("SVSIM_TEST_CHILD_CACHE"),
+    ) else {
+        return;
+    };
+    let text = format!(
+        "version = 1\n[[entry]]\nname = \"demo\"\nlicense = \"ISC\"\n[entry.source]\ngit = \"{}\"\nrev = \"{rev}\"\n[entry.discover]\nkind = \"sv-tests\"\nroot = \"tests\"\n",
+        url.to_string_lossy()
+    );
+    let e = parse_entry(&text);
+    // allow_file_protocol は false のまま
+    let o = FetchOptions::new(cache.into());
+    match fetch_entry(&e, &o) {
+        Err(Error::Git { message, .. }) if message.contains("not allowed") => {
+            println!("CHILD-RESULT: refused")
+        }
+        other => println!("CHILD-RESULT: unexpected {other:?}"),
+    }
 }
 
 // 異なる rev は別の場所に置かれ、互いに影響しない

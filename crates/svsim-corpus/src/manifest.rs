@@ -3,6 +3,9 @@
 //! - 形式は `version = 1` と `[[entry]]` の並び。未知のキーはエラー (`deny_unknown_fields`)。
 //! - M0 のソースは `git` だけ。`rev` は 40 桁のコミット ID だけを許す (再現性のため)。
 //! - 複数のマニフェストを読み込めるが、エントリ名が重複したらエラー。
+//! - `source.git` は `https://` の URL だけを許す。`file://` はテスト用の
+//!   [`ManifestOptions::allow_file_urls`] のときだけ許す (マネージャ決定)。
+//!   取得側も `git` を https だけ (テスト時は file も) 許す設定で実行する ([`crate::fetch`])。
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -17,6 +20,13 @@ pub const MANIFEST_VERSION: u32 = 1;
 
 /// 既定のマニフェストの、リポジトリのルートからの相対パス。
 pub const DEFAULT_MANIFEST_REL: &str = "corpus/manifest.toml";
+
+/// マニフェストの読み込みの設定。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ManifestOptions {
+    /// `source.git` に `file://` の URL を許す。テスト専用 (CLI の隠しオプション `--allow-file-protocol`)。
+    pub allow_file_urls: bool,
+}
 
 /// マニフェスト 1 ファイル分 (TOML のトップレベル)。
 #[derive(Debug, Clone, Deserialize)]
@@ -98,7 +108,18 @@ pub struct Manifest {
 
 impl Manifest {
     /// マニフェストの文字列を解析して検証する。`origin` はエラーメッセージ用 (ファイル名など)。
+    ///
+    /// 既定の設定 ([`ManifestOptions::default`]。`file://` は不可) で検証する。
     pub fn parse_str(text: &str, origin: &str) -> Result<Manifest, Error> {
+        Manifest::parse_str_with(text, origin, ManifestOptions::default())
+    }
+
+    /// [`Manifest::parse_str`] の、設定を指定する版。
+    pub fn parse_str_with(
+        text: &str,
+        origin: &str,
+        opts: ManifestOptions,
+    ) -> Result<Manifest, Error> {
         let file: ManifestFile = toml::from_str(text).map_err(|e| Error::Manifest {
             origin: origin.to_string(),
             message: e.to_string(),
@@ -115,21 +136,31 @@ impl Manifest {
         }
         let mut m = Manifest::default();
         for e in file.entry {
-            validate_entry(&e).map_err(|msg| bad(format!("entry `{}`: {msg}", e.name)))?;
+            validate_entry(&e, opts).map_err(|msg| bad(format!("entry `{}`: {msg}", e.name)))?;
             m.push_unique(e, origin)?;
         }
         Ok(m)
     }
 
-    /// ファイルから読み込む。
+    /// ファイルから読み込む (既定の設定)。
     pub fn load_file(path: &Path) -> Result<Manifest, Error> {
-        let text = std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
-        Manifest::parse_str(&text, &path.display().to_string())
+        Manifest::load_file_with(path, ManifestOptions::default())
     }
 
-    /// 複数のファイルを順に読み込んで併合する。同じファイル (正規化したパスが同じ) は 1 回だけ読む。
-    /// 異なるファイルの間でエントリ名が重複したらエラー。
+    /// [`Manifest::load_file`] の、設定を指定する版。
+    pub fn load_file_with(path: &Path, opts: ManifestOptions) -> Result<Manifest, Error> {
+        let text = std::fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
+        Manifest::parse_str_with(&text, &path.display().to_string(), opts)
+    }
+
+    /// 複数のファイルを順に読み込んで併合する (既定の設定)。同じファイル (正規化したパスが同じ) は
+    /// 1 回だけ読む。異なるファイルの間でエントリ名が重複したらエラー。
     pub fn load_files(paths: &[PathBuf]) -> Result<Manifest, Error> {
+        Manifest::load_files_with(paths, ManifestOptions::default())
+    }
+
+    /// [`Manifest::load_files`] の、設定を指定する版。
+    pub fn load_files_with(paths: &[PathBuf], opts: ManifestOptions) -> Result<Manifest, Error> {
         let mut seen = BTreeSet::new();
         let mut all = Manifest::default();
         for p in paths {
@@ -137,7 +168,7 @@ impl Manifest {
             if !seen.insert(key) {
                 continue;
             }
-            let m = Manifest::load_file(p)?;
+            let m = Manifest::load_file_with(p, opts)?;
             all.merge(m, &p.display().to_string())?;
         }
         Ok(all)
@@ -189,7 +220,37 @@ fn is_safe_relative(p: &Path) -> bool {
             .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
-fn validate_entry(e: &Entry) -> Result<(), String> {
+/// `source.git` の URL を検証する。
+///
+/// `https://<何か>` だけを許す。`file://` は `opts.allow_file_urls` のときだけ許す。
+/// それ以外 (`ssh://`、`git@host:path`、`http://`、ローカルパスなど) はエラー。
+/// スキームの大文字小文字は区別しない。
+fn validate_git_url(url: &str, opts: ManifestOptions) -> Result<(), String> {
+    if url.is_empty()
+        || url.starts_with('-')
+        || url.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(format!("source.git `{url}` is not a valid URL"));
+    }
+    let scheme = url
+        .split_once("://")
+        .map(|(s, rest)| (s.to_ascii_lowercase(), rest));
+    match scheme {
+        Some((s, rest)) if s == "https" && !rest.is_empty() => Ok(()),
+        Some((s, _)) if s == "file" => {
+            if opts.allow_file_urls {
+                Ok(())
+            } else {
+                Err(format!(
+                    "source.git `{url}`: file:// URLs are only allowed for tests (--allow-file-protocol)"
+                ))
+            }
+        }
+        _ => Err(format!("source.git `{url}` must be an https:// URL")),
+    }
+}
+
+fn validate_entry(e: &Entry, opts: ManifestOptions) -> Result<(), String> {
     if !is_valid_name(&e.name) {
         return Err(
             "name must be non-empty, consist of [A-Za-z0-9._-] and not start with `.`".into(),
@@ -201,10 +262,7 @@ fn validate_entry(e: &Entry) -> Result<(), String> {
             e.source.rev
         ));
     }
-    let url = &e.source.git;
-    if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_whitespace) {
-        return Err(format!("source.git `{url}` is not a valid URL"));
-    }
+    validate_git_url(&e.source.git, opts)?;
     for (key, list) in [
         ("source.submodules", &e.source.submodules),
         ("source.sparse", &e.source.sparse),
@@ -298,7 +356,7 @@ root = "tests"
     #[test]
     fn optional_fields_default() {
         let text = format!(
-            "version = 1\n[[entry]]\nname = \"a\"\nlicense = \"MIT\"\n[entry.source]\ngit = \"file:///x\"\nrev = \"{REV}\"\n[entry.discover]\nkind = \"sv-tests\"\nroot = \"tests\"\n"
+            "version = 1\n[[entry]]\nname = \"a\"\nlicense = \"MIT\"\n[entry.source]\ngit = \"https://example.invalid/x\"\nrev = \"{REV}\"\n[entry.discover]\nkind = \"sv-tests\"\nroot = \"tests\"\n"
         );
         let m = Manifest::parse_str(&text, "t").unwrap();
         let e = &m.entries[0];
@@ -420,6 +478,74 @@ root = "tests"
         for text in cases {
             assert!(Manifest::parse_str(&text, "t").is_err(), "{text}");
         }
+    }
+
+    // マネージャ決定 (STATUS.md「corpus file://」): file:// はテスト用のフラグのときだけ
+    #[test]
+    fn file_urls_require_test_flag() {
+        let base = manifest(&entry_toml("a", REV));
+        for url in [
+            "file:///tmp/repo.git",
+            "FILE:///tmp/repo.git",
+            "file://host/x",
+        ] {
+            let text = base.replace("https://example.invalid/repo", url);
+            let msg = err_msg(Manifest::parse_str(&text, "t"));
+            assert!(msg.contains("--allow-file-protocol"), "{url}: {msg}");
+            let allow = ManifestOptions {
+                allow_file_urls: true,
+            };
+            let m = Manifest::parse_str_with(&text, "t", allow).unwrap();
+            assert_eq!(m.entries[0].source.git, url);
+        }
+    }
+
+    // https 以外 (取得側の git でも禁じているプロトコル) は検証で弾く
+    #[test]
+    fn non_https_urls_are_rejected() {
+        let base = manifest(&entry_toml("a", REV));
+        let allow = ManifestOptions {
+            allow_file_urls: true,
+        };
+        for url in [
+            "http://example.invalid/repo",
+            "ssh://git@example.invalid/repo",
+            "git://example.invalid/repo",
+            "git@example.invalid:repo.git",
+            "ext::sh -c x",
+            "/abs/path/repo.git",
+            "../relative/repo.git",
+            "https://",
+            "https://a\u{7}b",
+        ] {
+            let text = base.replace("https://example.invalid/repo", url);
+            assert!(
+                Manifest::parse_str_with(&text, "t", allow).is_err(),
+                "{url}"
+            );
+        }
+        let text = base.replace("https://example.invalid/repo", "HTTPS://example.invalid/r");
+        assert!(Manifest::parse_str(&text, "t").is_ok());
+    }
+
+    #[test]
+    fn load_files_with_passes_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.toml");
+        let text =
+            manifest(&entry_toml("x", REV)).replace("https://example.invalid/repo", "file:///r");
+        std::fs::write(&p, text).unwrap();
+        assert!(Manifest::load_files(std::slice::from_ref(&p)).is_err());
+        let allow = ManifestOptions {
+            allow_file_urls: true,
+        };
+        assert_eq!(
+            Manifest::load_files_with(&[p], allow)
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
     }
 
     #[test]

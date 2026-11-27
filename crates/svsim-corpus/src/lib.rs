@@ -96,7 +96,11 @@ impl fmt::Display for Error {
             Error::Locked { path, holder } => {
                 write!(f, "{} is locked", path.display())?;
                 if let Some(h) = holder {
-                    write!(f, " by pid {} (created at unix time {})", h.pid, h.created)?;
+                    write!(
+                        f,
+                        " by pid {} (created at unix time {})",
+                        h.pid, h.created_unix
+                    )?;
                 }
                 write!(
                     f,
