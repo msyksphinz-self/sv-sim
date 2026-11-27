@@ -17,8 +17,13 @@
 | M0-T4 | ビット演算・リダクション・論理・比較・?:・エッジ (波3) | implementer | done |
 | M0-T6 | シフト・幅変更・連結・選択・$clog2 (波3) | implementer | done |
 | M0-T2 + T12fix | CI・deny.toml + コーパスのレビュー修正 (波3) | implementer | done |
-| M0-T5/T7/T8/T13 | 波4 | implementer | todo |
-| M0-T11 | 波5 | implementer | todo |
+| M0-T5 | 算術 (+ - * / % **、混在 pow_bits) (波4) | implementer | doing |
+| M0-T7 | リテラル・整数変換・文字列 (波4) | implementer | doing |
+| M0-T8 | 実数変換・表示フォーマット (波4) | implementer | doing |
+| M0-T13 | コーパス段階評価 + CI corpus-fetch + 波3 nit (波4) | implementer | doing |
+| M0-T11 | インターン・アリーナ (波5) | implementer | todo |
+| M0-T14 | 整理 (改名・補助統合・正規化修正) (波5) | implementer | todo |
+| M0-T9b | 参照モデル RealToIntStatus 4種化 | implementer (T9 個体) | todo |
 | M0-TR | テスト実行 | test-runner | todo |
 
 ## 決定事項ログ
@@ -56,3 +61,7 @@
 | 2026-11-27 | ビット補助の統合 | shift.rs の pub(crate) ビット補助 (read_bits 等) は波4の小修正タスクで words.rs に移す | マネージャ |
 | 2026-11-27 | 層3 の eq/ne/not | PartialEq::eq を隠す固有メソッドは紛らわしいので、LogicVec/BitVec の固有 eq/ne は `logic_eq`/`logic_ne` に改名、not は std::ops::Not を実装。波4の整理タスクで実施 | マネージャ |
 | 2026-11-27 | 整理タスク M0-T14 (波4) | 上記改名、ビット補助の words.rs への移動、view.rs の panic メッセージに関数名、テストのローカル比較補助を tests/common に寄せる | マネージャ |
+| 2026-11-27 | 波3レビュー | 全タスク承認 (blocker/major 0)。レビュアが規格から独立モデルを書いて照合し不一致 0 | マネージャ |
+| 2026-11-27 | T14 追加項目 | concat/replicate/get_slice の dst 上位ビット正規化 + 上位を汚した dst のテスト、shift の 1 パス化は任意 | マネージャ |
+| 2026-11-27 | T13 追加項目 | fetch.rs: 禁止プロトコルに ftp/ftps、GIT_SSL_NO_VERIFY 等を env_remove、manifest の https は小文字に限定、LockGuard::drop で remove 直前に same_file 再確認。ci.yml: push は main のみ + pull_request、main では cancel-in-progress しない | マネージャ |
+| 2026-11-27 | 波構成の変更 | T14 は words.rs/vec.rs を触るため T5/T7/T8 と衝突 → 波5 (T11 と並行) に移す。参照モデルの RealToIntStatus 4種化は T9 担当エージェント (本体を読まない) に別途依頼 | マネージャ |
