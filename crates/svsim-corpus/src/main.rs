@@ -2,8 +2,11 @@
 //!
 //! - `list`: マニフェストのエントリの一覧
 //! - `fetch [NAME...] [--offline] [--force-unlock]`: 取得 (名前を省略すると全部)
+//! - `discover NAME [--json]`: ケースを列挙し、件数とメタデータの統計を表示する (M0-T13)
+//! - `run NAME [--out DIR]`: 段階評価を実行し、`results.jsonl` と `summary.json` を書く (M0-T13)
 //!
-//! `discover` と `run` はタスク M0-T13 で追加する。
+//! `discover` と `run` はネットワークに出ない。取得していなければエラー (終了コード 1) にする。
+//! `run` はケースが失敗しても 0 以外にしない (計測用のため。plan.md §7.5)。
 //!
 //! 終了コード (plan.md §12 Q-18): 0 = 成功、1 = 実行時のエラー (取得の失敗、マニフェストが
 //! 見つからない・読めない・誤っている等)、2 = 使い方の誤り (clap の引数エラー、存在しないエントリ名)。
@@ -14,8 +17,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use svsim_corpus::discover::{self, Discovery};
 use svsim_corpus::fetch::{self, FetchOptions, FetchStatus};
 use svsim_corpus::manifest::ManifestOptions;
+use svsim_corpus::report::{self, Summary};
+use svsim_corpus::stage::{Pipeline, RunEnv};
 use svsim_corpus::{Error, Manifest, cache, manifest};
 
 /// sv-sim test corpus manager.
@@ -48,6 +54,22 @@ enum Cmd {
         /// Remove an existing lock even if its owner seems to be alive.
         #[arg(long)]
         force_unlock: bool,
+    },
+    /// Enumerate the test cases of a fetched corpus and show statistics.
+    Discover {
+        /// Entry name.
+        name: String,
+        /// Print the statistics and all cases as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run the staged evaluation and write results.jsonl and summary.json.
+    Run {
+        /// Entry name.
+        name: String,
+        /// Output directory (default: target/corpus-results/<NAME>/).
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
     },
 }
 
@@ -141,6 +163,63 @@ fn run(cli: Cli) -> Result<ExitCode, Failure> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Cmd::Discover { name, json } => {
+            let (entry, checkout, disc) = discover_named(&m, &name)?;
+            print_diagnostics(&disc);
+            let stats = disc.stats();
+            if json {
+                let v = serde_json::json!({
+                    "entry": entry.name,
+                    "rev": entry.source.rev,
+                    "checkout": checkout,
+                    "stats": stats,
+                    "warnings": disc.warnings,
+                    "errors": disc.errors,
+                    "cases": disc.cases,
+                });
+                let text = serde_json::to_string_pretty(&v)
+                    .map_err(|e| Failure::Runtime(Error::Other(e.to_string())))?;
+                println!("{text}");
+            } else {
+                println!(
+                    "{}: {} cases ({} should_fail, {} warnings, {} errors)",
+                    entry.name, stats.total, stats.should_fail, stats.warnings, stats.errors
+                );
+                println!("  by target:");
+                for (s, n) in &stats.by_target {
+                    println!("    {s}: {n}");
+                }
+                println!("  by :type:");
+                for (t, n) in &stats.by_type {
+                    println!("    {t}: {n}");
+                }
+                println!("  metadata keys:");
+                for (k, n) in &stats.keys {
+                    println!("    {k}: {n}");
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Run { name, out } => {
+            let (entry, checkout, disc) = discover_named(&m, &name)?;
+            print_diagnostics(&disc);
+            // M0 には runner が無いので、全ケースが Preprocess: NotImplemented になる
+            let pipeline = Pipeline::new();
+            let env = RunEnv {
+                checkout_dir: checkout,
+            };
+            let results = pipeline.run_all(&disc.cases, &env);
+            let summary = Summary::new(&entry.name, &entry.source.rev, &results);
+            let out = out.unwrap_or_else(|| {
+                report::default_out_dir(manifest::default_manifest_path().as_deref(), &entry.name)
+            });
+            report::write_results(&out, &summary, &results)?;
+            for line in summary.lines() {
+                println!("{line}");
+            }
+            println!("results: {}", out.display());
+            Ok(ExitCode::SUCCESS)
+        }
         Cmd::Fetch {
             names,
             offline,
@@ -178,6 +257,35 @@ fn run(cli: Cli) -> Result<ExitCode, Failure> {
                 ExitCode::from(1)
             })
         }
+    }
+}
+
+/// 名前のエントリを、取得済みのチェックアウトから列挙する (ネットワークに出ない)。
+fn discover_named<'m>(
+    m: &'m Manifest,
+    name: &str,
+) -> Result<(&'m manifest::Entry, PathBuf, Discovery), Failure> {
+    let entry = m
+        .get(name)
+        .ok_or_else(|| Failure::from(Error::UnknownEntry(name.to_string())))?;
+    let root = cache::cache_root_from_env()?;
+    let checkout = fetch::cached_checkout(entry, &root).ok_or_else(|| {
+        Failure::Runtime(Error::NotFetched {
+            name: entry.name.clone(),
+            path: cache::CacheLayout::new(&root, &entry.name, &entry.source.rev).checkout_dir,
+        })
+    })?;
+    let disc = discover::discover_entry(entry, &checkout)?;
+    Ok((entry, checkout, disc))
+}
+
+/// 列挙の警告とエラーを標準エラー出力に出す。
+fn print_diagnostics(d: &Discovery) {
+    for w in &d.warnings {
+        eprintln!("svsim-corpus: warning: {}: {}", w.path.display(), w.message);
+    }
+    for e in &d.errors {
+        eprintln!("svsim-corpus: error: {}: {}", e.path.display(), e.message);
     }
 }
 

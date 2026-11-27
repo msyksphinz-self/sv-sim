@@ -15,7 +15,11 @@
 //!
 //! `git` は `-c protocol.allow=never -c protocol.https.allow=always` で実行し、https 以外の
 //! プロトコルを使わせない。`file://` は [`FetchOptions::allow_file_protocol`] (テスト専用) のときだけ許す。
-//! 呼び出し元の環境の `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` / `GIT_ALLOW_PROTOCOL` は引き継がない。
+//! `ssh`、`git`、`http`、`ext`、`ftp`、`ftps` は `protocol.<name>.allow=never` で明示的にも禁じる
+//! (利用者の `~/.gitconfig` で許されていても使わせない)。`http.sslVerify=true` も付ける。
+//! 呼び出し元の環境の `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` / `GIT_ALLOW_PROTOCOL` と、
+//! TLS の検証を切る・任意のコマンドを実行させる環境変数 (`GIT_SSL_NO_VERIFY`、`GIT_SSH_COMMAND`、
+//! `GIT_ASKPASS` 等。[`DANGEROUS_GIT_ENV`]) は引き継がない。
 
 use std::ffi::OsStr;
 use std::fs;
@@ -136,7 +140,8 @@ pub fn fetch_entry(entry: &Entry, opts: &FetchOptions) -> Result<FetchOutcome, E
 fn populate(entry: &Entry, opts: &FetchOptions, dir: &Path) -> Result<(), Error> {
     let git = Git::new(opts, dir);
     let src = &entry.source;
-    git.run(["init", "-q"])?;
+    // テンプレート (利用者の init.templateDir にフックがあっても) を使わない
+    git.run(["init", "-q", "--template="])?;
     if !src.sparse.is_empty() {
         // non-cone の sparse checkout。各パスはリポジトリのルートに固定する (先頭に `/`)。
         git.run(["config", "core.sparseCheckout", "true"])?;
@@ -224,6 +229,27 @@ fn clean_leftovers(layout: &CacheLayout) -> Result<(), Error> {
     Ok(())
 }
 
+/// 明示的に禁じるプロトコル (`protocol.<name>.allow=never`)。
+pub const FORBIDDEN_PROTOCOLS: [&str; 6] = ["ssh", "git", "http", "ext", "ftp", "ftps"];
+
+/// 子プロセスの `git` から取り除く環境変数 (TLS の検証を切る、任意のコマンドを実行させる等)。
+///
+/// TLS の CA の指定 (`GIT_SSL_CAINFO` 等) とプロキシの設定は、社内のプロキシ経由での取得に要るので残す。
+pub const DANGEROUS_GIT_ENV: [&str; 12] = [
+    "GIT_SSL_NO_VERIFY",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+    "GIT_SSH_VARIANT",
+    "GIT_PROXY_COMMAND",
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "GIT_EXEC_PATH",
+    "GIT_TEMPLATE_DIR",
+    "GIT_EXTERNAL_DIFF",
+    "GIT_CONFIG",
+    "GIT_REPLACE_REF_BASE",
+];
+
 /// 環境を固定した `git` の呼び出し (R-18)。
 struct Git<'a> {
     program: &'a Path,
@@ -257,10 +283,16 @@ impl<'a> Git<'a> {
             .env_remove("GIT_CONFIG_PARAMETERS")
             .env_remove("GIT_CONFIG_COUNT")
             // GIT_ALLOW_PROTOCOL は protocol.*.allow の設定より優先されるので消す
-            .env_remove("GIT_ALLOW_PROTOCOL")
-            .args(["-c", "core.hooksPath=/dev/null"])
+            .env_remove("GIT_ALLOW_PROTOCOL");
+        // 安全性を下げる・任意のコマンドを実行させる環境変数を引き継がない
+        for k in DANGEROUS_GIT_ENV {
+            c.env_remove(k);
+        }
+        c.args(["-c", "core.hooksPath=/dev/null"])
             .args(["-c", "advice.detachedHead=false"])
             .args(["-c", "init.defaultBranch=main"])
+            // 利用者の設定 (~/.gitconfig) で TLS の検証が切られていても有効にする
+            .args(["-c", "http.sslVerify=true"])
             // 使えるプロトコルは https だけ (ssh, git, http, ext, ローカルパス等は不可)。
             // サブモジュールの取得にも GIT_CONFIG_PARAMETERS 経由で引き継がれる
             .args(["-c", "protocol.allow=never"])
@@ -268,7 +300,7 @@ impl<'a> Git<'a> {
             .stdin(Stdio::null());
         // protocol.<name>.allow は protocol.allow より優先されるので、利用者の設定ファイル
         // (~/.gitconfig 等) で組み込みのプロトコルが許されていても、ここで明示的に禁じる
-        for name in ["ssh", "git", "http", "ext"] {
+        for name in FORBIDDEN_PROTOCOLS {
             c.arg("-c").arg(format!("protocol.{name}.allow=never"));
         }
         // file:// はテスト (一時ディレクトリの bare リポジトリ) のときだけ
@@ -405,6 +437,9 @@ mod tests {
             "protocol.git.allow=never",
             "protocol.http.allow=never",
             "protocol.ext.allow=never",
+            "protocol.ftp.allow=never",
+            "protocol.ftps.allow=never",
+            "http.sslVerify=true",
             "core.hooksPath=/dev/null",
         ] {
             assert!(cfg.iter().any(|a| a == want), "{want} not in {cfg:?}");
@@ -420,6 +455,14 @@ mod tests {
             "GIT_CONFIG_COUNT",
             "GIT_ALLOW_PROTOCOL",
             "GIT_DIR",
+            "GIT_SSL_NO_VERIFY",
+            "GIT_SSH_COMMAND",
+            "GIT_SSH",
+            "GIT_PROXY_COMMAND",
+            "GIT_ASKPASS",
+            "SSH_ASKPASS",
+            "GIT_EXEC_PATH",
+            "GIT_TEMPLATE_DIR",
         ] {
             assert!(removed.iter().any(|r| r == k), "{k} not removed");
         }

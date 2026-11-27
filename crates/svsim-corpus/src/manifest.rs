@@ -222,9 +222,9 @@ fn is_safe_relative(p: &Path) -> bool {
 
 /// `source.git` の URL を検証する。
 ///
-/// `https://<何か>` だけを許す。`file://` は `opts.allow_file_urls` のときだけ許す。
-/// それ以外 (`ssh://`、`git@host:path`、`http://`、ローカルパスなど) はエラー。
-/// スキームの大文字小文字は区別しない。
+/// `https://<何か>` だけを許す (スキームは小文字の `https` に限る)。`file://` は
+/// `opts.allow_file_urls` のときだけ許す (`file` の大文字小文字は区別しない)。
+/// それ以外 (`HTTPS://`、`ssh://`、`git@host:path`、`http://`、ローカルパスなど) はエラー。
 fn validate_git_url(url: &str, opts: ManifestOptions) -> Result<(), String> {
     if url.is_empty()
         || url.starts_with('-')
@@ -232,12 +232,9 @@ fn validate_git_url(url: &str, opts: ManifestOptions) -> Result<(), String> {
     {
         return Err(format!("source.git `{url}` is not a valid URL"));
     }
-    let scheme = url
-        .split_once("://")
-        .map(|(s, rest)| (s.to_ascii_lowercase(), rest));
-    match scheme {
-        Some((s, rest)) if s == "https" && !rest.is_empty() => Ok(()),
-        Some((s, _)) if s == "file" => {
+    match url.split_once("://") {
+        Some(("https", rest)) if !rest.is_empty() => Ok(()),
+        Some((s, _)) if s.eq_ignore_ascii_case("file") => {
             if opts.allow_file_urls {
                 Ok(())
             } else {
@@ -511,6 +508,8 @@ root = "tests"
             "http://example.invalid/repo",
             "ssh://git@example.invalid/repo",
             "git://example.invalid/repo",
+            "ftp://example.invalid/repo",
+            "ftps://example.invalid/repo",
             "git@example.invalid:repo.git",
             "ext::sh -c x",
             "/abs/path/repo.git",
@@ -524,7 +523,13 @@ root = "tests"
                 "{url}"
             );
         }
-        let text = base.replace("https://example.invalid/repo", "HTTPS://example.invalid/r");
+        // https のスキームは小文字だけ (T13 追加項目)
+        for url in ["HTTPS://example.invalid/r", "Https://example.invalid/r"] {
+            let text = base.replace("https://example.invalid/repo", url);
+            let msg = err_msg(Manifest::parse_str_with(&text, "t", allow));
+            assert!(msg.contains("must be an https:// URL"), "{url}: {msg}");
+        }
+        let text = base.replace("https://example.invalid/repo", "https://example.invalid/r");
         assert!(Manifest::parse_str(&text, "t").is_ok());
     }
 

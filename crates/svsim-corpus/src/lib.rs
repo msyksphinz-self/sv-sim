@@ -5,20 +5,26 @@
 //! - [`manifest`] — `corpus/manifest.toml` の読み込みと検証 (§7.1、タスク M0-T12)
 //! - [`cache`] — キャッシュの配置と排他ロック (§7.2、M0-T12)
 //! - [`fetch`] — 外部コマンドの `git` による取得と検証 (§7.2、M0-T12)
-//!
-//! テストケースの列挙と段階評価 (§7.3, §7.4) はタスク M0-T13 で追加する。
+//! - [`discover`] — テストケースの列挙 (sv-tests アダプタ。§7.3、M0-T13)
+//! - [`stage`] — 段階評価の枠組み (§7.4、M0-T13)
+//! - [`report`] — 結果の出力 (`results.jsonl`、`summary.json`。§7.4、M0-T13)
 
 #![forbid(unsafe_code)]
 
 pub mod cache;
+pub mod discover;
 pub mod fetch;
 pub mod manifest;
+pub mod report;
+pub mod stage;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub use cache::LockInfo;
+pub use discover::{Expectation, TestCase};
 pub use manifest::{Entry, Manifest};
+pub use stage::{Pipeline, Stage, StageOutcome, StageRunner, Verdict};
 
 /// コーパスマネージャのエラー。
 #[derive(Debug)]
@@ -60,6 +66,13 @@ pub enum Error {
     },
     /// `--offline` で、キャッシュに無い。
     NotCached {
+        /// エントリ名。
+        name: String,
+        /// 期待する置き場所。
+        path: PathBuf,
+    },
+    /// まだ取得していない (`discover` / `run` の前に `fetch` が要る)。
+    NotFetched {
         /// エントリ名。
         name: String,
         /// 期待する置き場所。
@@ -110,6 +123,11 @@ impl fmt::Display for Error {
             Error::NotCached { name, path } => write!(
                 f,
                 "`{name}` is not in the cache ({}) and --offline was given",
+                path.display()
+            ),
+            Error::NotFetched { name, path } => write!(
+                f,
+                "`{name}` has not been fetched ({}); run `svsim-corpus fetch {name}` first",
                 path.display()
             ),
             Error::UnknownEntry(name) => write!(f, "no manifest entry named `{name}`"),

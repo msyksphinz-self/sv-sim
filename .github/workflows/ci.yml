@@ -4,12 +4,14 @@
 #   SHA は各リポジトリのタグから `git ls-remote --tags` で確認した (2026-11-27)。
 # - ツールチェーンは rust-toolchain.toml に従う (rustup がファイルを読んで導入する)。
 # - M0 は Linux (ubuntu-latest) だけで回す。
-# - `corpus-fetch` ジョブは M0-T13 で追加する。
+# - push は main だけで回し、作業ブランチは pull_request で回す (同じコミットを二重に回さない)。
+# - main 以外では、新しい実行が来たら古い実行を取り消す。main では取り消さない (全コミットの結果を残す)。
 
 name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
   schedule:
     # proptest-long を毎日 (UTC 18:00 = JST 03:00) 実行する
@@ -21,7 +23,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -130,3 +132,29 @@ jobs:
           PROPTEST_CASES: "100000"
       - name: Wide-value smoke tests (#[ignore])
         run: cargo test -p svsim-logic --release --locked -- --ignored
+
+  # コーパスの取得と列挙 (plan.md §6, §7、タスク M0-T13、TC82)。
+  # sv-tests を固定コミットで取得し、ケースを列挙する。キャッシュのキーはマニフェストのハッシュ。
+  corpus-fetch:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup toolchain install --no-self-update
+          rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Set corpus cache directory
+        run: echo "SVSIM_CORPUS_CACHE=$HOME/.cache/svsim/corpus" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/svsim/corpus
+          key: corpus-${{ runner.os }}-${{ hashFiles('corpus/manifest.toml') }}
+      # Cargo.lock を変えないことを --locked で確かめてから、エイリアス (`cargo corpus`) で動かす
+      - run: cargo build -p svsim-corpus --locked
+      - run: cargo corpus fetch sv-tests
+      - run: cargo corpus discover sv-tests

@@ -197,6 +197,8 @@ impl Drop for LockGuard {
         if same_file(&self.file, &self.path)
             && let Ok(text) = fs::read_to_string(&self.path)
             && LockInfo::parse(&text).as_ref() == Some(&self.info)
+            // 読んでいる間に置き換えられていないか、消す直前にもう一度確かめる
+            && same_file(&self.file, &self.path)
         {
             let _ = fs::remove_file(&self.path);
         }
@@ -644,6 +646,20 @@ mod tests {
         fs::write(&p, "pid=1\ncreated_unix=2\n").unwrap();
         drop(g);
         assert_eq!(fs::read_to_string(&p).unwrap(), "pid=1\ncreated_unix=2\n");
+    }
+
+    // 同じ中身の別のファイルに置き換えられていたら (--force-unlock で作り直された等) 消さない
+    #[cfg(unix)]
+    #[test]
+    fn guard_does_not_remove_replaced_lock_with_same_content() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join(".lock");
+        let g = acquire_lock(&p, LockOptions::default()).unwrap();
+        let text = g.info().to_text();
+        fs::remove_file(&p).unwrap();
+        fs::write(&p, &text).unwrap();
+        drop(g);
+        assert_eq!(fs::read_to_string(&p).unwrap(), text);
     }
 
     // 取る前にファイルが作り直された場合 (flock を取ったファイルがもうパスに無い) は取り直す
