@@ -290,3 +290,16 @@ sv-tests: 1028 cases (79 should_fail, 0 warnings, 0 errors)
 - ログ: `<scratch>/tr/` の `tc1_build.log`、`tc1_test.log`、`rel_test.log`、`tc2_fmt.log`、`tc2_clippy.log`、`tc3_doc.log`、`tc4_deny.log`、`tc53_ignored.log`、`tc55.log`、`tc55b.log`、`tc78_fetch1.log`、`disc.json`、`run1.log`、`run2.log`、`r1/`、`r2/`
 - 独立検算の crate: `<scratch>/tr/indep` (`src/main.rs`、`src/bin/{common,tc9_10,tc52,tc53,tc57}.rs`)
 - リポジトリ内で作られたもの: `/home/user/sv-sim/target/corpus-results/sv-tests/` (TC80.6) と、`cargo corpus list` のエイリアス確認で `/home/user/sv-sim/target/debug/` に入ったビルド。どちらも `.gitignore` の対象
+
+---
+
+## 追記: 再テスト (マネージャ、M0-T15 適用後、コミット 8e6d74e)
+
+| 項目 | 結果 |
+|---|---|
+| L-2 / TC55 `PROPTEST_CASES=100000 cargo test -p svsim-logic --release --locked --no-fail-fast` | **合格** (354 passed / 0 failed、"Too many" 0 件)。原因は戦略の NaN/∞ 棄却で、有限値だけの戦略に修正 |
+| `cargo test --workspace` (debug) | 603 passed / 0 failed |
+| clippy `-D warnings` / fmt | 合格 |
+| テスト不足 (d)1〜4 | TC52 固定幅 (bitwise/compare/arith)、TC53 2^20 add、TC63/64 ゴールデン、TC57 should_panic を追加し合格 |
+| (d)5 L64::bit の範囲外 | 層1 は debug_assert のみで可とマネージャ決定 (STATUS) |
+| A-2 / TC6 手順1、K-6 / TC82 (GitHub Actions) | 下記の CI 実行結果を参照 |

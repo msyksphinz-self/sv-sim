@@ -27,7 +27,7 @@
 | M0-T13b | コーパスのパス安全性修正 (波4レビュー) | implementer | done |
 | M0-T9b | 参照モデル RealToIntStatus 4種化 (本体を読まない別個体) | implementer | done |
 | M0-TR | テスト実行 (合格 23/26、L-2 不合格、A-2/K-6 未実施) | test-runner | done |
-| M0-T15 | テスト不足・L-2 修正、CI トリガ修正 | implementer | doing |
+| M0-T15 | テスト不足・L-2 修正、CI トリガ修正 | implementer | done |
 
 ## 決定事項ログ
 | 日付 | 項目 | 決定 | 決定者 |
