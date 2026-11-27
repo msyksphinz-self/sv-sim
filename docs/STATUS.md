@@ -11,8 +11,8 @@
 | M0-T1 | workspace 骨組み (波1) | implementer | done |
 | M0-T3a | logic 中核の型・API・全スタブ (波2) | implementer | doing |
 | M0-T9 | 参照モデル svsim-logic-ref (波2、独立実装) | implementer (別個体) | doing |
-| M0-T10 | ソースマップ・診断 (波2) | implementer | doing |
-| M0-T12 | コーパスマネージャ雛形 (波2) | implementer | doing |
+| M0-T10 | ソースマップ・診断 (波2) | implementer | done |
+| M0-T12 | コーパスマネージャ雛形 (波2) | implementer | done |
 | M0-T3b/T4/T6/T2 | 波3 | implementer | todo |
 | M0-T5/T7/T8/T13 | 波4 | implementer | todo |
 | M0-T11 | 波5 | implementer | todo |
@@ -30,3 +30,5 @@
 | 2026-11-27 | M0 R-2 例外 | 2値ベクタを X インデックスで読むと 0 (§11.5.1 明文どおり) を採用 | マネージャ |
 | 2026-11-27 | M0 U-6 MAX_WIDTH | 2^24 ビットで確定 | マネージャ |
 | 2026-11-27 | M0 R-9/R-10 | atoi は符号を解析しない / ?: の z/z は X (LRM 優先)。VCS 確認リスト V-6/V-8 | マネージャ |
+| 2026-11-27 | T13 範囲 | T13 の変更範囲に crates/svsim-corpus/src/lib.rs (モジュール宣言・Error 追加) を含める | マネージャ |
+| 2026-11-27 | corpus file:// | マニフェスト検証で file:// URL を拒否し、テスト用フラグ時のみ許可する (T13 で対応) | マネージャ |
