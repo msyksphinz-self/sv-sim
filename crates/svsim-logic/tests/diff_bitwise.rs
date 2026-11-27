@@ -5,6 +5,7 @@
 //!
 //! - M0-TC22: 幅 1〜3 の 4 値の全値 (2 値は全値) の網羅テスト (plan.md §5.4)。
 //! - M0-TC23: proptest の差分テスト (plan.md §5.3 の戦略)。
+//! - M0-TC52: 決まった幅 (1〜4096) × 値の模様の横断テスト (L-5)。
 //!
 //! 条番号: ビット演算 IEEE 1800-2023 §11.4.8、リダクション §11.4.9、`$countbits` 系 §20.9、
 //! 真理値と論理演算 §11.4.7 / §12.4、エッジ §9.4.2。
@@ -665,6 +666,50 @@ fn tc22_exhaustive_logic_scalar_methods() {
                 logic_to_ref(a).equiv(logic_to_ref(b)),
                 "{a}<->{b}"
             );
+        }
+    }
+}
+
+// ===========================================================================
+// M0-TC52 幅境界の横断テスト (L-5)
+// ===========================================================================
+
+/// TC52: 決まった幅 × 値の模様 (tests/common の `TC52_WIDTHS` / `tc52_patterns`) で、T4 のビット演算
+/// (§11.4.8)・リダクション (§11.4.9)・`$countbits` 系 (§20.9)・真理値と論理演算 (§11.4.7, §12.4)・
+/// エッジ (§9.4.2) を参照モデルと比べる。2 項は同じ幅の全模様の組。2 値版は X/Z を 0 にした模様。
+#[test]
+fn tc52_width_boundaries_bitwise() {
+    for w in TC52_WIDTHS {
+        let pats = tc52_patterns(w);
+        for x in &pats {
+            run_case(check_not(x));
+            run_case(check_reductions(x));
+            run_case(check_truth(x));
+            for m in 0..16u8 {
+                run_case(check_counts(x, m));
+            }
+            for y in &pats {
+                for op in BINS {
+                    run_case(check_bin(op, x, y));
+                }
+                run_case(check_logical_binary(x, y));
+                run_case(check_edge_lsb(x, y));
+            }
+        }
+        let bits = tc52_bit_patterns(w);
+        for x in &bits {
+            run_case(check_not2(x));
+            run_case(check_reductions2(x));
+            run_case(check_truth2(x));
+            for m in 0..16u8 {
+                run_case(check_counts2(x, m));
+            }
+            for y in &bits {
+                for op in BINS {
+                    run_case(check_bin2(op, x, y));
+                }
+                run_case(check_edge_lsb2(x, y));
+            }
         }
     }
 }

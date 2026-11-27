@@ -206,3 +206,136 @@ error: e
 ";
     assert_eq!(render_human(&sm, &d), expected);
 }
+
+// ===========================================================================
+// test-plan M0-TC63 / M0-TC64 の `a.sv` の例 (期待値は test-plan の表をそのまま写したもの)
+// ===========================================================================
+
+/// `a.sv` の行の先頭オフセット: 1 行目 0、2 行目 10、3 行目 19。
+const A_SV: &str = "module m;\n  wire w\nendmodule\n";
+
+fn a_sv() -> (SourceMap, FileId) {
+    let mut sm = SourceMap::new();
+    let f = sm.add_file(FileOrigin::Disk("a.sv".into()), A_SV.as_bytes().to_vec());
+    (sm, f)
+}
+
+/// TC63 の入力: 主ラベル (2 行目の `w`)、副ラベル (`wire`)、複数行の副ラベル、注記、fix-it。
+fn a_sv_diag(f: FileId) -> Diagnostic {
+    Diagnostic::error("expected ';'")
+        .with_code(DiagCode("E0001"))
+        .with_label(Label::primary(Span::new(f, 17, 18), "here"))
+        .with_label(Label::secondary(Span::new(f, 12, 16), "declaration"))
+        .with_label(Label::secondary(Span::new(f, 10, 28), "scope"))
+        .with_note("note one")
+        .with_fixit(FixIt {
+            span: Span::new(f, 18, 18),
+            replacement: ";".into(),
+            message: "insert ';'".into(),
+        })
+}
+
+/// TC63 (C-2, 決定 Q-13): `end_line`/`end_col` は `hi` (排他) の位置、`severity` は小文字、
+/// ラベルと fix-it は発行順。
+#[test]
+fn tc63_json_a_sv() {
+    let (sm, f) = a_sv();
+    let d = a_sv_diag(f);
+    let expected = json!({
+        "version": 1, "severity": "error", "code": "E0001", "message": "expected ';'",
+        "labels": [
+            {"file": "a.sv", "line": 2, "col": 8, "end_line": 2, "end_col": 9,
+             "message": "here", "primary": true},
+            {"file": "a.sv", "line": 2, "col": 3, "end_line": 2, "end_col": 7,
+             "message": "declaration", "primary": false},
+            {"file": "a.sv", "line": 2, "col": 1, "end_line": 3, "end_col": 10,
+             "message": "scope", "primary": false},
+        ],
+        "notes": ["note one"],
+        "fixits": [
+            {"file": "a.sv", "line": 2, "col": 9, "end_line": 2, "end_col": 9,
+             "replacement": ";", "message": "insert ';'"},
+        ],
+    });
+    let v = render_json(&sm, &d);
+    assert_eq!(v, expected);
+    // 決定性: 2 回呼んで同じ JSON 文字列。文字列から読み戻すと同じ値。
+    let s1 = serde_json::to_string(&v).unwrap();
+    let s2 = serde_json::to_string(&render_json(&sm, &d)).unwrap();
+    assert_eq!(s1, s2);
+    let back: serde_json::Value = serde_json::from_str(&s1).unwrap();
+    assert_eq!(back, expected);
+}
+
+/// TC63: code が無い診断は `"code": null`、注記と fix-it が無ければ空の配列。
+#[test]
+fn tc63_json_a_sv_without_code_notes_fixits() {
+    let (sm, f) = a_sv();
+    let d = Diagnostic::error("expected ';'").with_label(Label::primary(Span::new(f, 17, 18), ""));
+    assert_eq!(
+        render_json(&sm, &d),
+        json!({
+            "version": 1, "severity": "error", "code": null, "message": "expected ';'",
+            "labels": [{"file": "a.sv", "line": 2, "col": 8, "end_line": 2, "end_col": 9,
+                        "message": "", "primary": true}],
+            "notes": [], "fixits": [],
+        })
+    );
+}
+
+/// TC64 の追加ゴールデン 1: 主ラベル `here` + 同じ行の副ラベル `declaration` + 注記 (規則 1〜5, 8)。
+#[test]
+fn tc64_human_a_sv_primary_secondary_note() {
+    let (sm, f) = a_sv();
+    let d = Diagnostic::error("expected ';'")
+        .with_code(DiagCode("E0001"))
+        .with_label(Label::primary(Span::new(f, 17, 18), "here"))
+        .with_label(Label::secondary(Span::new(f, 12, 16), "declaration"))
+        .with_note("note one");
+    let expected = "\
+error[E0001]: expected ';'
+ --> a.sv:2:8
+  |
+2 |   wire w
+  |   ---- declaration
+  |        ^ here
+  |
+  = note: note one
+";
+    assert_eq!(render_human(&sm, &d), expected);
+}
+
+/// TC64 の追加ゴールデン 2: 複数行の主ラベルは開始行だけを、開始位置から行末まで印を付ける (規則 6)。
+#[test]
+fn tc64_human_a_sv_multiline_primary() {
+    let (sm, f) = a_sv();
+    let d = Diagnostic::error("in scope").with_label(Label::primary(Span::new(f, 10, 28), "scope"));
+    let expected = "\
+error: in scope
+ --> a.sv:2:1
+  |
+2 |   wire w
+  | ^^^^^^^^ scope
+";
+    assert_eq!(render_human(&sm, &d), expected);
+}
+
+/// TC64 の追加ゴールデン 3: マルチバイト文字の後ろの列は文字単位 (`あ` は 3 バイトで 1 文字、規則 5)。
+/// message が空なら印の後ろに空白を付けない。
+#[test]
+fn tc64_human_multibyte_column() {
+    let mut sm = SourceMap::new();
+    let f = sm.add_file(
+        FileOrigin::Disk("m.sv".into()),
+        "  wire あw\n".as_bytes().to_vec(),
+    );
+    let d = Diagnostic::error("e").with_label(Label::primary(Span::new(f, 10, 11), ""));
+    let expected = "\
+error: e
+ --> m.sv:1:9
+  |
+1 |   wire あw
+  |         ^
+";
+    assert_eq!(render_human(&sm, &d), expected);
+}

@@ -795,44 +795,7 @@ fn exhaustive_struct_w1_3() {
 // TC52: 幅境界の横断テスト (L-5)
 // ===========================================================================
 
-const TC52_WIDTHS: [u32; 16] = [
-    1, 2, 31, 32, 33, 63, 64, 65, 127, 128, 129, 1000, 1023, 1024, 1025, 4096,
-];
-
-fn patterns(w: u32) -> Vec<LogicVec> {
-    let mut out = vec![
-        LogicVec::zero(w),
-        LogicVec::filled(w, Logic::L1),
-        LogicVec::from_u64(w, 1),
-        LogicVec::filled(w, Logic::X),
-        LogicVec::filled(w, Logic::Z),
-    ];
-    let mut msb = LogicVec::zero(w);
-    msb.set_bit(w - 1, Logic::L1);
-    out.push(msb);
-    let mut not_msb = LogicVec::filled(w, Logic::L1);
-    not_msb.set_bit(w - 1, Logic::L0);
-    out.push(not_msb);
-    let mut alt = LogicVec::zero(w);
-    for i in (0..w).step_by(2) {
-        alt.set_bit(i, Logic::L1);
-    }
-    out.push(alt);
-    let mut b63 = LogicVec::zero(w);
-    for i in [63u32, 64] {
-        if i < w {
-            b63.set_bit(i, Logic::L1);
-        }
-    }
-    out.push(b63);
-    let mut msb_x = LogicVec::zero(w);
-    msb_x.set_bit(w - 1, Logic::X);
-    out.push(msb_x);
-    let mut lsb_z = LogicVec::zero(w);
-    lsb_z.set_bit(0, Logic::Z);
-    out.push(lsb_z);
-    out
-}
+// 幅と値の模様は tests/common の `TC52_WIDTHS` / `tc52_patterns`。
 
 fn tc52_amounts(w: u32) -> Vec<LogicVec> {
     let mut v: Vec<LogicVec> = [0u64, 1, 63, 64, 65, w as u64 - 1, w as u64, w as u64 + 1]
@@ -850,7 +813,7 @@ fn tc52_amounts(w: u32) -> Vec<LogicVec> {
 #[test]
 fn tc52_width_boundaries() {
     for w in TC52_WIDTHS {
-        let pats = patterns(w);
+        let pats = tc52_patterns(w);
         let amts = tc52_amounts(w);
         for x in &pats {
             for amt in &amts {

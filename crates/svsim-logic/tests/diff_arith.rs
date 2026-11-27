@@ -6,6 +6,7 @@
 //! 比べる。出力の正規化不変条件 (CR-2) と、入力が変わらないこと (CR-7) も検査する。
 //!
 //! - 網羅 (TC28 E): 幅 1〜6 の 2 値の全組み合わせ × 符号付き/符号なし。べき乗は指数の幅 1〜4 の全値。
+//! - 幅境界 (TC52): 幅 1〜4096 の決まった幅 × 値の模様。
 //! - 差分 (TC28 D): plan.md §5.3 の戦略 (X/Z なしの比率が高い算術向けの値、除数 0/1/-1/2 のべき、
 //!   指数は負・0・1・大きい値)。多ワードの除算の境界 (除数のワード数、被除数 < 除数) は局所の戦略で
 //!   増やす。
@@ -421,6 +422,57 @@ fn exhaustive_pow_small_widths() {
                     for (bs, es) in [(false, false), (false, true), (true, false), (true, true)] {
                         run_case(check_pow(&base, bs, &exp, es));
                     }
+                }
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// TC52: 幅境界の横断テスト (L-5)
+// ===========================================================================
+
+/// TC52: 決まった幅 × 値の模様 (tests/common の `TC52_WIDTHS` / `tc52_patterns`) で、算術
+/// (§11.4.2, §11.4.3) の 2 項演算 (同じ幅の全模様の組。2 値版は `check_bin` の中で X/Z を 0 にして
+/// 比べる) と単項演算を参照モデルと比べる。
+#[test]
+fn tc52_width_boundaries_arith() {
+    for w in TC52_WIDTHS {
+        let pats = tc52_patterns(w);
+        for x in &pats {
+            for op in UN_OPS {
+                run_case(check_un(op, x));
+            }
+            for y in &pats {
+                for op in BIN_OPS {
+                    run_case(check_bin(op, x, y));
+                }
+            }
+        }
+    }
+}
+
+/// TC52 のべき乗 (§11.4.3): base は決まった幅 × 値の模様、指数 (自己決定) は小さい幅の模様
+/// (0、1、2、3、15、x を含む、z、64、64 ビットの全 1、符号付きで負になる値) に加え、幅 ≤ 129 では
+/// base と同じ幅の模様の全組。幅 > 129 で同じ幅の全 1 の指数は、参照モデルのべき乗が重いので除く。
+#[test]
+fn tc52_width_boundaries_pow() {
+    let mut small: Vec<LogicVec> = ["0", "1", "10", "11", "1111", "0x1", "z", "1000000"]
+        .iter()
+        .map(|s| LogicVec::from_bits_str(s).unwrap())
+        .collect();
+    small.push(LogicVec::filled(64, svsim_logic::Logic::L1));
+    small.push(LogicVec::from_i64(8, -3));
+    for w in TC52_WIDTHS {
+        let pats = tc52_patterns(w);
+        let mut exps = small.clone();
+        if w <= 129 {
+            exps.extend(pats.iter().cloned());
+        }
+        for base in &pats {
+            for exp in &exps {
+                for (bs, es) in [(false, false), (false, true), (true, false), (true, true)] {
+                    run_case(check_pow(base, bs, exp, es));
                 }
             }
         }

@@ -6,6 +6,7 @@
 //!
 //! - M0-TC22: 幅 1〜3 の 4 値の全値 × 全組の網羅テスト (plan.md §5.4)。
 //! - M0-TC23: proptest の差分テスト (plan.md §5.3 の戦略)。
+//! - M0-TC52: 決まった幅 (1〜4096) × 値の模様の横断テスト (L-5)。
 //! - M0-TC34 の一部: `cond_merge_bits` が「`from_two_state` してから `cond_merge`」と一致する (CR-6)。
 //!
 //! 条番号: 等価 IEEE 1800-2023 §11.4.5、ワイルドカード §11.4.6、casez/casex §12.5.1、
@@ -368,6 +369,35 @@ fn tc22_exhaustive_compare_two_state_widths_1_to_4() {
                 check_eqv2(x, y).unwrap();
                 check_rel2(x, y).unwrap();
                 check_cond_merge_bits(x, y).unwrap();
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// M0-TC52 幅境界の横断テスト (L-5)
+// ===========================================================================
+
+/// TC52: 決まった幅 × 値の模様で、等価・ワイルドカード・casez/casex (§11.4.5, §11.4.6, §12.5.1)、
+/// 関係演算 (§11.4.4, §11.8.1)、条件演算子のマージ (§11.4.11) と混在カーネル (plan.md §3.5.1) を
+/// 参照モデルと比べる。2 項は同じ幅の全模様の組。
+#[test]
+fn tc52_width_boundaries_compare() {
+    for w in TC52_WIDTHS {
+        let pats = tc52_patterns(w);
+        for x in &pats {
+            for y in &pats {
+                run_case(check_eqv(x, y));
+                run_case(check_rel(x, y));
+                run_case(check_cond_merge(x, y));
+            }
+        }
+        let bits = tc52_bit_patterns(w);
+        for x in &bits {
+            for y in &bits {
+                run_case(check_eqv2(x, y));
+                run_case(check_rel2(x, y));
+                run_case(check_cond_merge_bits(x, y));
             }
         }
     }

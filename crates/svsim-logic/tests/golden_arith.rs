@@ -650,3 +650,107 @@ fn pow_bits_mixed_3_5_1() {
     // 4 値の結果なので x (2 値の変数への代入で 0 にするのは呼び出し側)。
     assert_eq!(run(0, true, "1111", true, &mut s), xs(8));
 }
+
+// ===========================================================================
+// TC57: 幅違いは panic する (plan.md §3.3 規約 1、決定 Q-1。release でも panic)
+// ===========================================================================
+//
+// 2 項の算術 (§11.4.2, §11.4.3) は文脈決定の演算なので、呼び出し側がオペランドを同じ幅に揃える。
+// 揃っていなければ panic し、メッセージに関数名と、出力先・オペランドの幅が出る。
+
+#[test]
+#[should_panic(expected = "add: width mismatch (dst 8, x 8, y 9)")]
+fn tc57_add_width_mismatch_panics() {
+    let _ = LogicVec::zero(8).add(&LogicVec::zero(9));
+}
+
+#[test]
+#[should_panic(expected = "add: width mismatch (dst 9, x 8, y 8)")]
+fn tc57_add_kernel_dst_width_mismatch_panics() {
+    let (x, y) = (LogicVec::zero(8), LogicVec::zero(8));
+    let mut d = LogicVec::zero(9);
+    arith::add(d.as_mut(), x.as_ref(), y.as_ref());
+}
+
+#[test]
+#[should_panic(expected = "add_assign: width mismatch (dst 8, x 9)")]
+fn tc57_add_assign_width_mismatch_panics() {
+    let mut v = LogicVec::zero(8);
+    v.add_assign(&LogicVec::zero(9));
+}
+
+#[test]
+#[should_panic(expected = "sub: width mismatch (dst 64, x 64, y 65)")]
+fn tc57_sub_width_mismatch_panics() {
+    let _ = LogicVec::zero(64).sub(&LogicVec::zero(65));
+}
+
+#[test]
+#[should_panic(expected = "mul: width mismatch (dst 8, x 8, y 9)")]
+fn tc57_mul_width_mismatch_panics() {
+    let _ = LogicVec::zero(8).mul(&LogicVec::zero(9));
+}
+
+#[test]
+#[should_panic(expected = "div: width mismatch (dst 8, x 8, y 9)")]
+fn tc57_div_width_mismatch_panics() {
+    let _ = LogicVec::zero(8).div(&LogicVec::zero(9), false);
+}
+
+#[test]
+#[should_panic(expected = "rem: width mismatch (dst 8, x 8, y 9)")]
+fn tc57_rem_width_mismatch_panics() {
+    let _ = LogicVec::zero(8).rem(&LogicVec::zero(9), true);
+}
+
+#[test]
+#[should_panic(expected = "add2: width mismatch (dst 8, x 8, y 9)")]
+fn tc57_add2_width_mismatch_panics() {
+    let _ = BitVec::zero(8).add(&BitVec::zero(9));
+}
+
+#[test]
+#[should_panic(expected = "neg: width mismatch (dst 9, x 8)")]
+fn tc57_neg_kernel_dst_width_mismatch_panics() {
+    let x = LogicVec::zero(8);
+    let mut d = LogicVec::zero(9);
+    arith::neg(d.as_mut(), x.as_ref());
+}
+
+/// べき乗の指数は自己決定 (§11.4.3) なので幅が違ってよいが、出力先は base と同じ幅でなければならない。
+#[test]
+#[should_panic(expected = "pow: width mismatch (dst 9, x 8)")]
+fn tc57_pow_kernel_dst_width_mismatch_panics() {
+    let (b, e) = (LogicVec::zero(8), LogicVec::zero(3));
+    let mut d = LogicVec::zero(9);
+    let mut s = Scratch::new();
+    arith::pow(d.as_mut(), b.as_ref(), false, e.as_ref(), false, &mut s);
+}
+
+// ===========================================================================
+// TC53: 上限近くの幅のスモークテスト (幅 2^20、R-27)
+// ===========================================================================
+
+/// TC53: 幅 2^20 で「全 1 + 1」が全 0 になる (§11.4.2、2^w で折り返す)。桁上げが全ワードを伝わる。
+/// 4 値 (層 3、`_assign`)、2 値の両方。所要時間は出力するだけで合否には使わない。
+#[test]
+#[ignore]
+fn tc53_add_all_ones_plus_one_2_pow_20() {
+    let w = 1u32 << 20;
+    let ones = LogicVec::filled(w, Logic::L1);
+    let one = LogicVec::from_u64(w, 1);
+    let t = std::time::Instant::now();
+    let r = ones.add(&one);
+    println!("TC53 add (4-state, w = 2^20): {:?}", t.elapsed());
+    assert_eq!(r, LogicVec::zero(w));
+    let mut v = ones.clone();
+    v.add_assign(&one);
+    assert_eq!(v, LogicVec::zero(w));
+
+    let ones2 = ones.to_bit_vec();
+    let one2 = BitVec::from_u64(w, 1);
+    let t = std::time::Instant::now();
+    let r2 = ones2.add(&one2);
+    println!("TC53 add (2-state, w = 2^20): {:?}", t.elapsed());
+    assert_eq!(r2, BitVec::zero(w));
+}

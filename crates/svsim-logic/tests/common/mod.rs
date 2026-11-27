@@ -759,6 +759,66 @@ pub fn all_bits(w: u32) -> Vec<BitVec> {
 }
 
 // ===========================================================================
+// M0-TC52 幅境界の横断テストの入力 (L-5)
+// ===========================================================================
+
+/// TC52 の固定幅 (乱数に頼らない境界の幅と、幅 > 1000)。
+pub const TC52_WIDTHS: [u32; 16] = [
+    1, 2, 31, 32, 33, 63, 64, 65, 127, 128, 129, 1000, 1023, 1024, 1025, 4096,
+];
+
+/// TC52 の値の模様 (幅 `w` ≥ 1): 全 0、全 1、`1`、MSB だけ 1、MSB 以外全 1、交互 `0101…`、
+/// bit 63/64 の両側だけ 1 (幅に収まるものだけ)、全 x、全 z、MSB だけ x、LSB だけ z。
+///
+/// 幅が小さいと同じ値が重なる (例: 幅 1 の全 1 と `1`)。重なりはそのまま残す (件数が少し増えるだけ)。
+pub fn tc52_patterns(w: u32) -> Vec<LogicVec> {
+    let mut out = vec![
+        LogicVec::zero(w),
+        LogicVec::filled(w, Logic::L1),
+        LogicVec::from_u64(w, 1),
+    ];
+    let mut msb = LogicVec::zero(w);
+    msb.set_bit(w - 1, Logic::L1);
+    out.push(msb);
+    let mut not_msb = LogicVec::filled(w, Logic::L1);
+    not_msb.set_bit(w - 1, Logic::L0);
+    out.push(not_msb);
+    let mut alt = LogicVec::zero(w);
+    for i in (0..w).step_by(2) {
+        alt.set_bit(i, Logic::L1);
+    }
+    out.push(alt);
+    let mut b63 = LogicVec::zero(w);
+    for i in [63u32, 64] {
+        if i < w {
+            b63.set_bit(i, Logic::L1);
+        }
+    }
+    out.push(b63);
+    out.push(LogicVec::filled(w, Logic::X));
+    out.push(LogicVec::filled(w, Logic::Z));
+    let mut msb_x = LogicVec::zero(w);
+    msb_x.set_bit(w - 1, Logic::X);
+    out.push(msb_x);
+    let mut lsb_z = LogicVec::zero(w);
+    lsb_z.set_bit(0, Logic::Z);
+    out.push(lsb_z);
+    out
+}
+
+/// TC52 の模様の 2 値版 (X/Z を 0 にしたもの。重複は除く)。
+pub fn tc52_bit_patterns(w: u32) -> Vec<BitVec> {
+    let mut out: Vec<BitVec> = Vec::new();
+    for p in tc52_patterns(w) {
+        let b = p.to_bit_vec();
+        if !out.contains(&b) {
+            out.push(b);
+        }
+    }
+    out
+}
+
+// ===========================================================================
 // 層 1 / 層 2 のための補助
 // ===========================================================================
 

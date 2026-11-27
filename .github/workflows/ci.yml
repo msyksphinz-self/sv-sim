@@ -4,14 +4,15 @@
 #   SHA は各リポジトリのタグから `git ls-remote --tags` で確認した (2026-11-27)。
 # - ツールチェーンは rust-toolchain.toml に従う (rustup がファイルを読んで導入する)。
 # - M0 は Linux (ubuntu-latest) だけで回す。
-# - push は main だけで回し、作業ブランチは pull_request で回す (同じコミットを二重に回さない)。
+# - push はすべてのブランチで回す (作業ブランチで PR を作らずに開発するため。M0-T15 のマネージャ決定)。
+#   pull_request も回すので、PR のあるブランチでは同じコミットが push と pull_request の両方で回る
+#   (concurrency のグループはイベント名を含むので、互いに取り消し合わない)。
 # - main 以外では、新しい実行が来たら古い実行を取り消す。main では取り消さない (全コミットの結果を残す)。
 
 name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
   schedule:
     # proptest-long を毎日 (UTC 18:00 = JST 03:00) 実行する
@@ -135,8 +136,9 @@ jobs:
 
   # コーパスの取得と列挙 (plan.md §6, §7、タスク M0-T13、TC82)。
   # sv-tests を固定コミットで取得し、ケースを列挙する。キャッシュのキーはマニフェストのハッシュ。
+  # 手動起動 (workflow_dispatch) でも動かす (M0-T15、TC82 の確認用)。
   corpus-fetch:
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

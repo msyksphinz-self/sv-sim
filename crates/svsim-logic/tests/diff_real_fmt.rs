@@ -28,7 +28,30 @@ const WIDE: u32 = 1100;
 /// f64 の入力 (TC44): ビットパターンの一様乱数、非正規化数、±0、±∞、NaN、2 のべき ± 0.5、
 /// 整数 + 0.5、整数に近い値。
 fn f64_value() -> BoxedStrategy<f64> {
-    let special = prop::sample::select(vec![
+    f64_value_with(false)
+}
+
+/// [`f64_value`] から NaN・±∞ を除いたもの (有限値だけ)。
+///
+/// 性質のテストで `prop_assume!(v.is_finite())` を使うと、`PROPTEST_CASES=100000` で proptest の
+/// 既定の `max_global_rejects` (1024) を超えて打ち切られる (M0-TR の TC55)。棄却せずに済むように、
+/// 有限値だけを生成する。
+fn finite_f64_value() -> BoxedStrategy<f64> {
+    f64_value_with(true)
+}
+
+/// 非有限の値を、符号と仮数を保ったまま指数を 1 つ下げて有限にする (指数 0x7FF → 0x7FE)。
+fn to_finite(v: f64) -> f64 {
+    if v.is_finite() {
+        v
+    } else {
+        f64::from_bits(v.to_bits() & !(1u64 << 52))
+    }
+}
+
+/// `finite_only` なら、特別な値の表から NaN・±∞ を除き、乱数で作る値は [`to_finite`] で有限に写す。
+fn f64_value_with(finite_only: bool) -> BoxedStrategy<f64> {
+    let mut specials = vec![
         0.0,
         -0.0,
         f64::INFINITY,
@@ -48,7 +71,11 @@ fn f64_value() -> BoxedStrategy<f64> {
         4503599627370495.5,
         1e20,
         1e300,
-    ]);
+    ];
+    if finite_only {
+        specials.retain(|v| v.is_finite());
+    }
+    let special = prop::sample::select(specials);
     let pow2_half = (-60i32..1024, any::<bool>(), 0u8..3).prop_map(|(k, neg, d)| {
         let p = 2f64.powi(k);
         let v = match d {
@@ -77,6 +104,7 @@ fn f64_value() -> BoxedStrategy<f64> {
         1 => subnormal,
         4 => bits,
     ]
+    .prop_map(move |v| if finite_only { to_finite(v) } else { v })
     .boxed()
 }
 
@@ -382,11 +410,16 @@ proptest! {
 
     /// TC44 の性質: 有限の v と十分広い dst で `to_f64(from_f64_trunc(v), S) == v.trunc()`。
     #[test]
-    fn trunc_round_trip(v in f64_value()) {
-        prop_assume!(v.is_finite());
+    fn trunc_round_trip(v in finite_f64_value()) {
         let (x, _) = LogicVec::from_f64_trunc(WIDE, v);
         let back = x.to_f64(true);
         prop_assert_eq!(back, v.trunc(), "v = {:e}", v);
+    }
+
+    /// 戦略の自己検査: [`finite_f64_value`] は有限値だけを出す (TC55 の棄却を無くした根拠)。
+    #[test]
+    fn finite_f64_value_is_finite(v in finite_f64_value()) {
+        prop_assert!(v.is_finite(), "v = {:e}", v);
     }
 
     /// TC44 の性質: |n| <= 2^53 の整数 n で `to_f64(n) as i64 == n`。
