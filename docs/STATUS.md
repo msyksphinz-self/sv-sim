@@ -8,8 +8,14 @@
 | M0-P | M0 詳細計画 | planner | done |
 | M0-R | 計画レビュー (条件付き承認 → v2 で反映) | plan-reviewer | done |
 | M0-TP | テスト計画 | test-planner | doing |
-| M0-T1 | workspace 骨組み (波1) | implementer | doing |
-| M0-T2〜T13 | 波2〜5 (plan.md §8.2) | implementer | todo |
+| M0-T1 | workspace 骨組み (波1) | implementer | done |
+| M0-T3a | logic 中核の型・API・全スタブ (波2) | implementer | doing |
+| M0-T9 | 参照モデル svsim-logic-ref (波2、独立実装) | implementer (別個体) | doing |
+| M0-T10 | ソースマップ・診断 (波2) | implementer | doing |
+| M0-T12 | コーパスマネージャ雛形 (波2) | implementer | doing |
+| M0-T3b/T4/T6/T2 | 波3 | implementer | todo |
+| M0-T5/T7/T8/T13 | 波4 | implementer | todo |
+| M0-T11 | 波5 | implementer | todo |
 | M0-TR | テスト実行 | test-runner | todo |
 
 ## 決定事項ログ
