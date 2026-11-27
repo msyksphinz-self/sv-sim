@@ -1,0 +1,15 @@
+[package]
+name = "svsim-logic-ref"
+description = "Reference model of svsim-logic for differential testing (test only)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+num-bigint.workspace = true
+num-traits.workspace = true
+
+[lints]
+workspace = true

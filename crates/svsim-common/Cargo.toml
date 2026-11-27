@@ -1,0 +1,19 @@
+[package]
+name = "svsim-common"
+description = "sv-sim common infrastructure: source map, diagnostics, interning, arenas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rustc-hash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# アリーナとロジック値ビューの結合テスト用 (plan.md §2.1, §4.4)。循環にはならない。
+svsim-logic.workspace = true
+
+[lints]
+workspace = true

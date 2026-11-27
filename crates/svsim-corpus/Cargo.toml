@@ -1,0 +1,28 @@
+[package]
+name = "svsim-corpus"
+description = "sv-sim test corpus manager"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "svsim-corpus"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+# テストで一時ディレクトリに bare リポジトリや .sv を作るため (plan-review R-17)
+tempfile.workspace = true
+
+[lints]
+workspace = true

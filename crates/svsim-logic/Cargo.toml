@@ -1,0 +1,17 @@
+[package]
+name = "svsim-logic"
+description = "sv-sim 4-state / 2-state bit vector representation and operations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# 依存ゼロにする (plan.md §2.1)。JIT ランタイムや DPI 側から軽くリンクするため。
+[dependencies]
+
+[dev-dependencies]
+proptest.workspace = true
+svsim-logic-ref.workspace = true
+
+[lints]
+workspace = true
