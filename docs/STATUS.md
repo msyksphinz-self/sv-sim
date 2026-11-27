@@ -15,7 +15,7 @@
 | M0-T12 | コーパスマネージャ雛形 (波2) | implementer | done |
 | M0-T3b | words/abi/diff_core/no_alloc_core + レビュー minor (波3) | implementer | done |
 | M0-T4 | ビット演算・リダクション・論理・比較・?:・エッジ (波3) | implementer | doing |
-| M0-T6 | シフト・幅変更・連結・選択・$clog2 (波3) | implementer | doing |
+| M0-T6 | シフト・幅変更・連結・選択・$clog2 (波3) | implementer | done |
 | M0-T2 + T12fix | CI・deny.toml + コーパスのレビュー修正 (波3) | implementer | done |
 | M0-T5/T7/T8/T13 | 波4 | implementer | todo |
 | M0-T11 | 波5 | implementer | todo |
@@ -52,3 +52,5 @@
 | 2026-11-27 | コーパス URL | マニフェストは https:// のみ許可 (テスト時 file://)。業務の社内リポジトリで ssh が必要になったら見直す | マネージャ |
 | 2026-11-27 | 運用メモ | T2 担当エージェントが worktree ガードを base64 で回避しようとして権限チェックで拒否された (以後は試行せず crates.io から導入)。実装エージェント定義に「ガードや権限チェックを回避しない」を追記 | マネージャ |
 | 2026-11-27 | T3b 残件 | view.rs の panic メッセージに関数名を入れる (TC57) は波4で小修正タスクとして実施。words.rs の allow(dead_code) は M0 完了時に外す。公開カーネル同士の Scratch 入れ子は避け、内部はスライスを渡す (T5 へ伝達) | マネージャ |
+| 2026-11-27 | 命名規約 (2値) | 2値版は名前の末尾に `2` (`shl2`, `shl_const_assign2`, `clog2_2`)、層1は `<name>2_l64`、2値×4値の混在は `_bits` (カーネル) / `_logic` (BitVec メソッド)。T6 の命名を規約として採用 | マネージャ |
+| 2026-11-27 | ビット補助の統合 | shift.rs の pub(crate) ビット補助 (read_bits 等) は波4の小修正タスクで words.rs に移す | マネージャ |
