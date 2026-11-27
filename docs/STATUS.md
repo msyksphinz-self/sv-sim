@@ -23,7 +23,7 @@
 | M0-T13 | コーパス段階評価 + CI corpus-fetch + 波3 nit (波4) | implementer | done |
 | M0-T11 | インターン・アリーナ (波5) | implementer | doing |
 | M0-T14 | 整理 (改名・補助統合・正規化修正) (波5) | implementer | todo |
-| M0-T9b | 参照モデル RealToIntStatus 4種化 (本体を読まない別個体) | implementer | doing |
+| M0-T9b | 参照モデル RealToIntStatus 4種化 (本体を読まない別個体) | implementer | done |
 | M0-TR | テスト実行 | test-runner | todo |
 
 ## 決定事項ログ
@@ -68,3 +68,4 @@
 | 2026-11-27 | T7 | リテラル幅 > MAX_WIDTH は Err(TooWide) (参照モデルは上限なし、差分テスト範囲外)。sema での警告/エラーは M1 で決める。文字列変換の層1版は作らない (JIT では層2を呼ぶ) | マネージャ |
 | 2026-11-27 | T13 | discover の解析エラーは当面 終了コード 0 + 件数表示。CI で件数 (1028) を検査する厳格モードは M1 で追加。GIT_ASKPASS 除去は社内 https 認証が必要になったら見直し | マネージャ |
 | 2026-11-27 | T8 | 幅0の表示は panic せず空/`0` (呼び出し側の誤り扱い)。T9b 完了後に diff_real_fmt へ状態の直接照合を追加 (T14 で実施)。10進表示 O(nw²) は M5 で必要なら改善 | マネージャ |
+| 2026-11-27 | T9b | Wrapped と Rounded が同時なら Wrapped 優先。幅0 dst は「n=0 のときだけ収まる」(本体と揃える、T14 で確認)。TC44 の状態照合の保留を解除 (T14 で diff_real_fmt に追加) | マネージャ |
