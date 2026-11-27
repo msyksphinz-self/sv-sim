@@ -298,7 +298,7 @@
   | z | x | x | x | x |
 
   `~^` と `^~` は `^` の結果の 0 と 1 を入れ替えたもの (x は x)。`~`: 0→1, 1→0, x→x, z→x。
-- 追加のベクタ例: `8'b0101_xz10 & 8'b0011_0zz1` → `8'b0001_0xx0`、`|` → `8'b0111_xxx1`、`^` → `8'b0110_xxx1`。
+- 追加のベクタ例: `8'b0101_xz10 & 8'b0011_0zz1` → `8'b0001_0xx0`、`|` → `8'b0111_xx11` (bit 1 は 1 | z = 1)、`^` → `8'b0110_xxx1`。
   - 2 値: `8'hf0 & 8'h3c` = `8'h30`、`|` = `8'hfc`、`^` = `8'hcc`、`~^` = `8'h33`、`~8'hf0` = `8'h0f`。
 - 根拠: §11.4.8、plan §3.4 (式は手計算で表と一致済み: plan-review §1.2)。
 - 実行: `cargo test -p svsim-logic --test golden_bitwise` / 自動。
@@ -1144,7 +1144,7 @@
   3. `disjoint_mut` で A と B を同時に取り、`and_assign(A, B)` を in-place で実行。
   4. 期待: A = `65'b0_…_x001` の形 (bit 64 は 1&0 = 0、bit 0 = 1、bit 3 = x&1 = x、他は 0)。B は不変。
   5. C を `BitMut` で書き、`add2` 系で in-place に 1 を足して桁上げを確認。
-  6. snapshot → A を `fill(X)` → restore → A が 4 の値に戻り、ハッシュも戻る。
+  6. snapshot → A を `fill(X)` → restore → A が手順 4 の結果の値に戻り、ハッシュも戻る。
 - 実行: `cargo test -p svsim-common --test arena_logic` / 自動。
 
 ---
