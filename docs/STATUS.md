@@ -39,3 +39,4 @@
 | 2026-11-27 | M0 Q-1〜Q-21 残り | planner が plan.md v2.1 で回答し、test-plan.md の期待値を確定する | マネージャ |
 | 2026-11-27 | M0 ops 命名 | ops/mod.rs で glob 再エクスポートしない。カーネルは `ops::<分野>::<名前>`。同じファイル内の層1スカラ版は `_l64` 接尾辞 | マネージャ |
 | 2026-11-27 | proptest 回帰ファイル | proptest 既定 (テストファイル隣の `tests/<name>.proptest-regressions`) を採用しコミットする | マネージャ |
+| 2026-11-27 | M0 Q-1〜Q-22 | plan.md v2.1 §12 の回答を採用 (要ユーザ確認なし)。注意: Q-6 の RealToIntStatus は4種 (Exact/Rounded/Wrapped/NotFinite) だが参照モデルは2種 → T8 着手時に参照モデルも合わせる | マネージャ |
