@@ -110,7 +110,7 @@ fn tc54_logic_vec_methods_do_not_allocate() {
             let mut sink = 0u64;
             let mut s = |l: Logic| sink = sink.wrapping_add(l as u64);
             // ビット演算 (§11.4.8)
-            black_box(x.not());
+            black_box(!&x);
             black_box(x.and(&y));
             black_box(x.or(&y));
             black_box(x.xor(&y));
@@ -120,7 +120,7 @@ fn tc54_logic_vec_methods_do_not_allocate() {
             acc.or_assign(&y);
             acc.xor_assign(&y);
             acc.xnor_assign(&y);
-            black_box(bx.not());
+            black_box(!&bx);
             black_box(bx.and(&by));
             black_box(bx.or(&by));
             black_box(bx.xor(&by));
@@ -153,8 +153,8 @@ fn tc54_logic_vec_methods_do_not_allocate() {
                 .equiv(Logic::L0));
             black_box((bx.truth(), bx.logical_not()));
             // 等価・比較 (§11.4.4〜§11.4.6, §12.5.1)
-            s(x.eq(&y));
-            s(x.ne(&y));
+            s(x.logic_eq(&y));
+            s(x.logic_ne(&y));
             s(x.wildcard_eq(&y));
             s(x.wildcard_ne(&y));
             black_box((
@@ -175,7 +175,12 @@ fn tc54_logic_vec_methods_do_not_allocate() {
                     bx.ge(&by, sg),
                 ));
             }
-            black_box((bx.eq(&by), bx.ne(&by), bx.case_eq(&by), bx.case_ne(&by)));
+            black_box((
+                bx.bit_eq(&by),
+                bx.bit_ne(&by),
+                bx.case_eq(&by),
+                bx.case_ne(&by),
+            ));
             black_box((bx.wildcard_eq(&by), bx.wildcard_ne(&by)));
             black_box((bx.casez_match(&by), bx.casex_match(&by)));
             // ?: のマージ (§11.4.11、§3.5.1)

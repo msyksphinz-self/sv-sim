@@ -21,36 +21,6 @@ use svsim_logic::{BitRef, BitVec, L64, Logic, LogicRef, LogicVec};
 use svsim_logic_ref as r;
 use svsim_logic_ref::{RefLogic, RefVec};
 
-fn rl(v: Logic) -> RefLogic {
-    match v {
-        Logic::L0 => RefLogic::Zero,
-        Logic::L1 => RefLogic::One,
-        Logic::X => RefLogic::X,
-        Logic::Z => RefLogic::Z,
-    }
-}
-
-fn rb(b: bool) -> RefLogic {
-    RefLogic::from_bool(b)
-}
-
-fn all_logic(w: u32) -> Vec<LogicVec> {
-    (0..4usize.pow(w))
-        .map(|mut n| {
-            let mut v = LogicVec::zero(w);
-            for i in 0..w {
-                v.set_bit(i, Logic::ALL[n % 4]);
-                n /= 4;
-            }
-            v
-        })
-        .collect()
-}
-
-fn all_bits(w: u32) -> Vec<BitVec> {
-    (0..1u64 << w).map(|n| BitVec::from_u64(w, n)).collect()
-}
-
 // ===========================================================================
 // 等価系 (§11.4.5, §11.4.6, §12.5.1)
 // ===========================================================================
@@ -83,54 +53,54 @@ impl Eqv {
         match self {
             Eqv::Eq => r::eq(x, y),
             Eqv::Ne => r::ne(x, y),
-            Eqv::CaseEq => rb(r::case_eq(x, y)),
-            Eqv::CaseNe => rb(r::case_ne(x, y)),
+            Eqv::CaseEq => bool_to_ref(r::case_eq(x, y)),
+            Eqv::CaseNe => bool_to_ref(r::case_ne(x, y)),
             Eqv::WildEq => r::wildcard_eq(x, y),
             Eqv::WildNe => r::wildcard_ne(x, y),
-            Eqv::Casez => rb(r::casez_match(x, y)),
-            Eqv::Casex => rb(r::casex_match(x, y)),
+            Eqv::Casez => bool_to_ref(r::casez_match(x, y)),
+            Eqv::Casex => bool_to_ref(r::casex_match(x, y)),
         }
     }
     fn l3(self, x: &LogicVec, y: &LogicVec) -> RefLogic {
         match self {
-            Eqv::Eq => rl(x.eq(y)),
-            Eqv::Ne => rl(x.ne(y)),
-            Eqv::CaseEq => rb(x.case_eq(y)),
-            Eqv::CaseNe => rb(x.case_ne(y)),
-            Eqv::WildEq => rl(x.wildcard_eq(y)),
-            Eqv::WildNe => rl(x.wildcard_ne(y)),
-            Eqv::Casez => rb(x.casez_match(y)),
-            Eqv::Casex => rb(x.casex_match(y)),
+            Eqv::Eq => logic_to_ref(x.logic_eq(y)),
+            Eqv::Ne => logic_to_ref(x.logic_ne(y)),
+            Eqv::CaseEq => bool_to_ref(x.case_eq(y)),
+            Eqv::CaseNe => bool_to_ref(x.case_ne(y)),
+            Eqv::WildEq => logic_to_ref(x.wildcard_eq(y)),
+            Eqv::WildNe => logic_to_ref(x.wildcard_ne(y)),
+            Eqv::Casez => bool_to_ref(x.casez_match(y)),
+            Eqv::Casex => bool_to_ref(x.casex_match(y)),
         }
     }
     fn l2(self, x: LogicRef<'_>, y: LogicRef<'_>) -> RefLogic {
         match self {
-            Eqv::Eq => rl(compare::eq(x, y)),
-            Eqv::Ne => rl(compare::ne(x, y)),
-            Eqv::CaseEq => rb(compare::case_eq(x, y)),
-            Eqv::CaseNe => rb(compare::case_ne(x, y)),
-            Eqv::WildEq => rl(compare::wildcard_eq(x, y)),
-            Eqv::WildNe => rl(compare::wildcard_ne(x, y)),
-            Eqv::Casez => rb(compare::casez_match(x, y)),
-            Eqv::Casex => rb(compare::casex_match(x, y)),
+            Eqv::Eq => logic_to_ref(compare::eq(x, y)),
+            Eqv::Ne => logic_to_ref(compare::ne(x, y)),
+            Eqv::CaseEq => bool_to_ref(compare::case_eq(x, y)),
+            Eqv::CaseNe => bool_to_ref(compare::case_ne(x, y)),
+            Eqv::WildEq => logic_to_ref(compare::wildcard_eq(x, y)),
+            Eqv::WildNe => logic_to_ref(compare::wildcard_ne(x, y)),
+            Eqv::Casez => bool_to_ref(compare::casez_match(x, y)),
+            Eqv::Casex => bool_to_ref(compare::casex_match(x, y)),
         }
     }
     fn l1(self, x: L64, y: L64, w: u32) -> RefLogic {
         match self {
-            Eqv::Eq => rl(compare::eq_l64(x, y, w)),
-            Eqv::Ne => rl(compare::ne_l64(x, y, w)),
-            Eqv::CaseEq => rb(compare::case_eq_l64(x, y, w)),
-            Eqv::CaseNe => rb(compare::case_ne_l64(x, y, w)),
-            Eqv::WildEq => rl(compare::wildcard_eq_l64(x, y, w)),
-            Eqv::WildNe => rl(compare::wildcard_ne_l64(x, y, w)),
-            Eqv::Casez => rb(compare::casez_match_l64(x, y, w)),
-            Eqv::Casex => rb(compare::casex_match_l64(x, y, w)),
+            Eqv::Eq => logic_to_ref(compare::eq_l64(x, y, w)),
+            Eqv::Ne => logic_to_ref(compare::ne_l64(x, y, w)),
+            Eqv::CaseEq => bool_to_ref(compare::case_eq_l64(x, y, w)),
+            Eqv::CaseNe => bool_to_ref(compare::case_ne_l64(x, y, w)),
+            Eqv::WildEq => logic_to_ref(compare::wildcard_eq_l64(x, y, w)),
+            Eqv::WildNe => logic_to_ref(compare::wildcard_ne_l64(x, y, w)),
+            Eqv::Casez => bool_to_ref(compare::casez_match_l64(x, y, w)),
+            Eqv::Casex => bool_to_ref(compare::casex_match_l64(x, y, w)),
         }
     }
     fn b3(self, x: &BitVec, y: &BitVec) -> bool {
         match self {
-            Eqv::Eq => x.eq(y),
-            Eqv::Ne => x.ne(y),
+            Eqv::Eq => x.bit_eq(y),
+            Eqv::Ne => x.bit_ne(y),
             Eqv::CaseEq => x.case_eq(y),
             Eqv::CaseNe => x.case_ne(y),
             Eqv::WildEq => x.wildcard_eq(y),
@@ -186,11 +156,16 @@ fn check_eqv2(x: &BitVec, y: &BitVec) -> Result<(), TestCaseError> {
     for op in EQVS {
         let ctx = format!("{op:?}2 w={w} x={x:?} y={y:?}");
         let want = op.reference(&rx, &ry);
-        prop_assert_eq!(rb(op.b3(x, y)), want, "{} L3", ctx);
-        prop_assert_eq!(rb(op.b2(sx.as_ref(), sy.as_ref())), want, "{} L2", ctx);
+        prop_assert_eq!(bool_to_ref(op.b3(x, y)), want, "{} L3", ctx);
+        prop_assert_eq!(
+            bool_to_ref(op.b2(sx.as_ref(), sy.as_ref())),
+            want,
+            "{} L2",
+            ctx
+        );
         if w <= 64 {
             let got = op.b1(to_u64_scalar(x), to_u64_scalar(y), w);
-            prop_assert_eq!(rb(got), want, "{} L1", ctx);
+            prop_assert_eq!(bool_to_ref(got), want, "{} L1", ctx);
         }
     }
     Ok(())
@@ -277,10 +252,20 @@ fn check_rel(x: &LogicVec, y: &LogicVec) -> Result<(), TestCaseError> {
         for op in RELS {
             let ctx = format!("{op:?} signed={s} w={w} x={x:?} y={y:?}");
             let want = op.reference(&rx, &ry, s);
-            prop_assert_eq!(rl(op.l3(x, y, s)), want, "{} L3", ctx);
-            prop_assert_eq!(rl(op.l2(sx.as_ref(), sy.as_ref(), s)), want, "{} L2", ctx);
+            prop_assert_eq!(logic_to_ref(op.l3(x, y, s)), want, "{} L3", ctx);
+            prop_assert_eq!(
+                logic_to_ref(op.l2(sx.as_ref(), sy.as_ref(), s)),
+                want,
+                "{} L2",
+                ctx
+            );
             if w <= 64 {
-                prop_assert_eq!(rl(op.l1(to_l64(x), to_l64(y), w, s)), want, "{} L1", ctx);
+                prop_assert_eq!(
+                    logic_to_ref(op.l1(to_l64(x), to_l64(y), w, s)),
+                    want,
+                    "{} L1",
+                    ctx
+                );
             }
         }
     }
@@ -294,11 +279,16 @@ fn check_rel2(x: &BitVec, y: &BitVec) -> Result<(), TestCaseError> {
         for op in RELS {
             let ctx = format!("{op:?}2 signed={s} w={w} x={x:?} y={y:?}");
             let want = op.reference(&rx, &ry, s);
-            prop_assert_eq!(rb(op.b3(x, y, s)), want, "{} L3", ctx);
-            prop_assert_eq!(rb(op.b2(x.as_ref(), y.as_ref(), s)), want, "{} L2", ctx);
+            prop_assert_eq!(bool_to_ref(op.b3(x, y, s)), want, "{} L3", ctx);
+            prop_assert_eq!(
+                bool_to_ref(op.b2(x.as_ref(), y.as_ref(), s)),
+                want,
+                "{} L2",
+                ctx
+            );
             if w <= 64 {
                 let got = op.b1(to_u64_scalar(x), to_u64_scalar(y), w, s);
-                prop_assert_eq!(rb(got), want, "{} L1", ctx);
+                prop_assert_eq!(bool_to_ref(got), want, "{} L1", ctx);
             }
         }
     }

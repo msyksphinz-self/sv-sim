@@ -50,10 +50,21 @@ impl fmt::Display for ParseBitsError {
 impl std::error::Error for ParseBitsError {}
 
 #[inline]
-fn check_width(width: u32) {
+#[track_caller]
+fn check_width(f: &str, width: u32) {
     assert!(
         width <= MAX_WIDTH,
-        "width {width} exceeds MAX_WIDTH ({MAX_WIDTH})"
+        "{f}: width {width} exceeds MAX_WIDTH ({MAX_WIDTH})"
+    );
+}
+
+/// ビット位置の検査。panic のメッセージは `"<f>: ..."` の形 (test-plan TC57)。
+#[inline]
+#[track_caller]
+fn check_index(f: &str, width: u32, i: u32) {
+    assert!(
+        i < width,
+        "{f}: bit index {i} out of range for width {width}"
     );
 }
 
@@ -144,7 +155,7 @@ impl LogicVec {
     /// # Panics
     /// `width > MAX_WIDTH` の場合。
     pub fn zero(width: u32) -> Self {
-        check_width(width);
+        check_width("LogicVec::zero", width);
         let store = if width <= 64 {
             Store::Inline { a: 0, b: 0 }
         } else {
@@ -263,6 +274,7 @@ impl LogicVec {
     /// `i >= width` の場合。
     #[inline]
     pub fn bit(&self, i: u32) -> Logic {
+        check_index("LogicVec::bit", self.width, i);
         self.as_ref().bit(i)
     }
 
@@ -272,6 +284,7 @@ impl LogicVec {
     /// `i >= width` の場合。
     #[inline]
     pub fn set_bit(&mut self, i: u32, v: Logic) {
+        check_index("LogicVec::set_bit", self.width, i);
         self.as_mut().set_bit(i, v);
     }
 
@@ -384,7 +397,7 @@ impl BitVec {
     /// # Panics
     /// `width > MAX_WIDTH` の場合。
     pub fn zero(width: u32) -> Self {
-        check_width(width);
+        check_width("BitVec::zero", width);
         let store = if width <= 64 {
             Store2::Inline(0)
         } else {
@@ -487,6 +500,7 @@ impl BitVec {
     /// `i >= width` の場合。
     #[inline]
     pub fn bit(&self, i: u32) -> bool {
+        check_index("BitVec::bit", self.width, i);
         self.as_ref().bit(i)
     }
 
@@ -496,6 +510,7 @@ impl BitVec {
     /// `i >= width` の場合。
     #[inline]
     pub fn set_bit(&mut self, i: u32, v: bool) {
+        check_index("BitVec::set_bit", self.width, i);
         self.as_mut().set_bit(i, v);
     }
 

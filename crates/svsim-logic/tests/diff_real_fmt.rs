@@ -2,8 +2,9 @@
 //! TC44, TC48 (性質), TC49, TC54 (補助の性質), TC52 (幅の境界))。
 //!
 //! - 実数: `to_f64 to_f32 from_f64_round from_f64_trunc` (4 値・2 値) の値を参照モデルと比べる。
-//!   参照モデルの `RefRealToIntStatus` はまだ 2 種 (Ok/NotFinite) なので、状態は参照モデルと比べず、
-//!   test-plan TC43 の定義 (Q-6) から独立に求めたものと比べる (TC44 の「性質 (状態)」)。
+//!   状態 (`RealToIntStatus`) は参照モデルの `RefRealToIntStatus` (4 種、M0-T9b) と直接照合し、
+//!   test-plan TC43 の定義 (Q-6) から独立に求めたものとも比べる (TC44 の「性質 (状態)」)。
+//!   幅 0 の dst (「n = 0 のときだけ収まる」) も照合する (M0-T14)。
 //! - 表示: `format_int` / `format_int2` / `itoa` を参照モデルの `format_int` / `itoa` と文字列で比べる。
 
 mod common;
@@ -18,7 +19,7 @@ use svsim_logic_ref as r;
 use svsim_logic_ref::{RefFieldWidth, RefFmtRadix, RefRealToIntStatus, RefVec};
 
 // ===========================================================================
-// ローカルの補助 (tests/common は読むだけ、plan.md §3.7)
+// ローカルの補助 (共通のものは tests/common にある)
 // ===========================================================================
 
 /// どの有限の f64 の整数値も符号付きで収まる幅 (2^1024 未満 → 1025 ビットで足りる)。
@@ -249,6 +250,16 @@ fn expected_status(v: f64, w: u32, wide: &RefVec) -> RealToIntStatus {
     }
 }
 
+/// 参照モデルの状態を本体の型に写す (バリアントは 1 対 1、Q-6)。
+fn status_from_ref(s: RefRealToIntStatus) -> RealToIntStatus {
+    match s {
+        RefRealToIntStatus::Exact => RealToIntStatus::Exact,
+        RefRealToIntStatus::Rounded => RealToIntStatus::Rounded,
+        RefRealToIntStatus::Wrapped => RealToIntStatus::Wrapped,
+        RefRealToIntStatus::NotFinite => RealToIntStatus::NotFinite,
+    }
+}
+
 // ===========================================================================
 // 実数 (TC44)
 // ===========================================================================
@@ -284,19 +295,16 @@ fn check_from_real(w: u32, v: f64, round: bool) -> Result<(), TestCaseError> {
     } else {
         r::from_f64_trunc(w as usize, v)
     };
-    // 参照モデルの状態は 2 種。NotFinite だけ照合する (値は比べる)。
-    prop_assert_eq!(
-        ref_status == RefRealToIntStatus::NotFinite,
-        !v.is_finite(),
-        "{}",
-        ctx
-    );
     let wide = if round {
         r::from_f64_round(WIDE as usize, v).0
     } else {
         r::from_f64_trunc(WIDE as usize, v).0
     };
     let want_status = expected_status(v, w, &wide);
+    // 参照モデルの状態 (4 種、M0-T9b) を直接照合する (TC44)。Q-6 の定義から独立に求めた状態とも
+    // 一致すること (参照モデル自身の検査)。
+    let ref_status = status_from_ref(ref_status);
+    prop_assert_eq!(ref_status, want_status, "{}: reference status vs Q-6", ctx);
 
     // 層 2 (プレーンが隣接せず、出力先を汚しておく)。
     let mut d = SplitLogic::dirty(w);
@@ -591,6 +599,34 @@ fn format_and_real_boundary_widths() {
         ] {
             check_from_real(w, v, true).unwrap();
             check_from_real(w, v, false).unwrap();
+        }
+    }
+}
+
+/// TC44: 幅 0 の dst の状態 (呼び出し側の誤り扱いだが panic しない。T8/T9b の決定: 「n = 0 のときだけ
+/// 収まる」)。本体・参照モデル・Q-6 の定義の三者が一致することを確かめる。
+#[test]
+fn from_real_width0_status_matches_ref() {
+    for v in [
+        0.0,
+        -0.0,
+        0.3,
+        -0.3,
+        0.5,
+        -0.5,
+        0.7,
+        1.0,
+        -1.0,
+        1.5,
+        f64::MIN_POSITIVE,
+        5e-324,
+        1e300,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ] {
+        for round in [false, true] {
+            check_from_real(0, v, round).unwrap();
         }
     }
 }

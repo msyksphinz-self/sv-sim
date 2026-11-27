@@ -15,7 +15,7 @@
 
 use crate::layout::word_mask;
 use crate::logic::Logic;
-use crate::ops::bitwise::check_nonzero_width;
+use crate::ops::check_nonzero_width;
 use crate::scalar::{L64, mask};
 use crate::vec::{BitVec, LogicVec};
 use crate::view::{BitRef, LogicRef};

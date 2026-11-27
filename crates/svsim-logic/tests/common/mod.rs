@@ -6,7 +6,9 @@
 //! - 層 2 のカーネルをプレーンが隣接しないビューで試すための [`SplitLogic`] / [`SplitBits`]。
 //!
 //! 使い方: 各テストファイルの先頭で `mod common;` と書く。T4〜T8 はこのファイルを**読むだけ**にし、
-//! 追加の戦略は各テストファイルの中に書く (plan.md §3.7)。
+//! 追加の戦略は各テストファイルの中に書いた (plan.md §3.7)。M0-T14 で、複数のテストファイルに重複
+//! していた変換・検査の補助 (`bool_to_ref`、`edge_to_ref`、`all_logic`、`check_unchanged` など) を
+//! ここに寄せた。
 //!
 //! 参照モデルの API は `RefVec::{from_bits_str, to_bits_string, width}` だけを使う (plan.md §5.1)。
 //!
@@ -16,8 +18,9 @@
 
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
+use svsim_logic::ops::edge::Edge;
 use svsim_logic::{BitMut, BitRef, BitVec, L64, Logic, LogicMut, LogicRef, LogicVec, words_for};
-use svsim_logic_ref::{RefLogic, RefVec};
+use svsim_logic_ref::{RefEdge, RefLogic, RefVec};
 
 // ===========================================================================
 // 幅
@@ -679,6 +682,82 @@ pub fn check_value_eq<T: PartialEq + core::fmt::Debug>(
     Ok(())
 }
 
+/// `bool` を参照モデルの 1 ビットの値にする (真 → 1、偽 → 0)。
+pub fn bool_to_ref(b: bool) -> RefLogic {
+    RefLogic::from_bool(b)
+}
+
+/// エッジ検出の結果 ([`Edge`]、§9.4.2) を参照モデルの [`RefEdge`] にする。
+pub fn edge_to_ref(e: Edge) -> RefEdge {
+    match e {
+        Edge::None => RefEdge::None,
+        Edge::Pos => RefEdge::Pos,
+        Edge::Neg => RefEdge::Neg,
+    }
+}
+
+/// 2 値版の期待値: 参照モデルの結果 → `to_two_state` (CR-5、plan.md §5.2)。X/Z は 0 になる。
+pub fn ref_two_state(x: &RefVec) -> RefVec {
+    svsim_logic_ref::to_two_state(x)
+}
+
+/// 層 1 の 2 値の結果 (幅 `w` の `u64`) が正規化され、参照モデルの結果と一致することを検査する。
+pub fn check_eq_ref_u64(got: u64, w: u32, want: &RefVec, ctx: &str) -> Result<(), TestCaseError> {
+    prop_assert_eq!(
+        got & !svsim_logic::scalar::mask(w),
+        0,
+        "{}: u64 not normalized",
+        ctx
+    );
+    check_eq_ref2(BitVec::from_u64(w, got).as_ref(), want, ctx)
+}
+
+/// 入力が演算の前後で変わっていないことを検査する (CR-7)。
+pub fn check_unchanged<T: PartialEq + core::fmt::Debug>(
+    before: &T,
+    after: &T,
+    ctx: &str,
+) -> Result<(), TestCaseError> {
+    prop_assert!(
+        before == after,
+        "{}: input modified ({:?} -> {:?})",
+        ctx,
+        before,
+        after
+    );
+    Ok(())
+}
+
+/// proptest の外 (網羅テスト) で検査関数の結果を確かめる。`Err` なら panic する。
+pub fn run_case(r: Result<(), TestCaseError>) {
+    if let Err(e) = r {
+        panic!("{e}");
+    }
+}
+
+// ===========================================================================
+// 網羅テストの入力 (plan.md §5.4)
+// ===========================================================================
+
+/// 幅 `w` の 4 値の全値 (4^w 個)。ビット `i` は `n` の 4 進の `i` 桁目 (0, 1, x, z の順)。
+pub fn all_logic(w: u32) -> Vec<LogicVec> {
+    (0..4usize.pow(w))
+        .map(|mut n| {
+            let mut v = LogicVec::zero(w);
+            for i in 0..w {
+                v.set_bit(i, Logic::ALL[n % 4]);
+                n /= 4;
+            }
+            v
+        })
+        .collect()
+}
+
+/// 幅 `w` の 2 値の全値 (2^w 個)。
+pub fn all_bits(w: u32) -> Vec<BitVec> {
+    (0..1u64 << w).map(|n| BitVec::from_u64(w, n)).collect()
+}
+
 // ===========================================================================
 // 層 1 / 層 2 のための補助
 // ===========================================================================
@@ -708,8 +787,8 @@ pub fn to_u64_scalar(x: &BitVec) -> u64 {
 
 /// aval と bval を別々の `Vec` に持つ 4 値 (プレーンが隣接しないビューを作るため)。
 ///
-/// 層 2 のカーネルの出力先には [`SplitLogic::dirty`] を使う。全ビットが X で埋まっているので、
-/// カーネルが出力の全ビットを書くことを検査できる。
+/// 層 2 のカーネルの出力先には [`SplitLogic::dirty`] を使う。全ビットが X で、幅より上のビットも
+/// 1 で埋まっているので、カーネルが出力の全ビットを書き、正規化することを検査できる。
 #[derive(Clone, Debug)]
 pub struct SplitLogic {
     /// ビット幅。
@@ -731,9 +810,16 @@ impl SplitLogic {
         }
     }
 
-    /// 全ビット X (正規化済み) で埋めた出力先。
+    /// 全ビット X で埋め、さらに**幅より上のビット (最上位ワードの未使用ビット) も 1 にした**出力先
+    /// (正規化されていない)。カーネルが出力の全ビットを書くことと、最後に正規化すること
+    /// (plan.md §3.2、test-plan TC12) を同時に検査できる。
     pub fn dirty(width: u32) -> Self {
-        SplitLogic::from_vec(&LogicVec::filled(width, Logic::X))
+        let nw = words_for(width);
+        SplitLogic {
+            width,
+            a: vec![!0u64; nw],
+            b: vec![!0u64; nw],
+        }
     }
 
     /// 読み取りビュー。
@@ -770,9 +856,13 @@ impl SplitBits {
         }
     }
 
-    /// 全ビット 1 (正規化済み) で埋めた出力先。
+    /// 全ビット 1 で埋め、さらに幅より上のビットも 1 にした出力先 (正規化されていない)。
+    /// [`SplitLogic::dirty`] と同じ目的。
     pub fn dirty(width: u32) -> Self {
-        SplitBits::from_vec(&BitVec::filled(width, true))
+        SplitBits {
+            width,
+            a: vec![!0u64; words_for(width)],
+        }
     }
 
     /// 読み取りビュー。

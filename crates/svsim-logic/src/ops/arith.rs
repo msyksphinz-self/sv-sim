@@ -388,12 +388,6 @@ fn is_one(x: &[u64]) -> bool {
     }
 }
 
-/// ワード列のビット `i`。
-#[inline]
-fn bit_at(x: &[u64], i: u64) -> bool {
-    (x[(i / 64) as usize] >> (i % 64)) & 1 != 0
-}
-
 /// `x` (in-place、幅 `w`、`nw = x.len() >= 2`) を `y` で割った商 (`rem` が偽) または剰余 (`rem` が真)
 /// にする。除数が 0 なら偽を返し、`x` は変えない。`un` (長さ `nw + 1`) と `vn` (長さ `nw`) は作業領域。
 fn divrem_words(
@@ -520,7 +514,7 @@ fn pow_words(
     } else {
         // base が奇数: 指数の下位 w ビット (e mod 2^w) だけを使う。
         let mut n = ebits.min(w as u64);
-        while n > 0 && !bit_at(exp, n - 1) {
+        while n > 0 && !words::bit(exp, n - 1) {
             n -= 1;
         }
         n
@@ -534,7 +528,7 @@ fn pow_words(
     for i in (0..nbits - 1).rev() {
         words::mul_lo(tmp, dst, dst);
         dst.copy_from_slice(tmp);
-        if bit_at(exp, i) {
+        if words::bit(exp, i) {
             words::mul_lo(tmp, dst, base);
             dst.copy_from_slice(tmp);
         }

@@ -10,11 +10,12 @@
 //! - 書き: 範囲内のビットだけを書き、範囲外は無視する。`Unknown` なら何も書かない。
 //! - `offset + 幅` のオーバフローを起こさないよう、範囲の計算は `i128` で行う。
 
+use crate::layout::normalize_plane;
 use crate::logic::Logic;
-use crate::ops::shift::{copy_bits, fill_bits, plane_is_zero};
 use crate::scalar::{L64, mask, sign_bit, sign_extend};
 use crate::vec::{BitVec, LogicVec};
 use crate::view::{BitMut, BitRef, LogicMut, LogicRef};
+use crate::words::{copy_bits, fill_bits, is_zero};
 
 /// 選択のインデックス (§11.5.1)。
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -52,7 +53,7 @@ fn plane_to_i64_sat(width: u32, a: &[u64], signed: bool) -> i64 {
     let nw = a.len();
     if !signed || width < 64 && !sign_bit(a[0], width) {
         // 非負の値。
-        if !plane_is_zero(&a[1..]) || a[0] > i64::MAX as u64 {
+        if !is_zero(&a[1..]) || a[0] > i64::MAX as u64 {
             return i64::MAX;
         }
         return a[0] as i64;
@@ -132,6 +133,9 @@ pub fn get_slice(dst: LogicMut<'_>, src: LogicRef<'_>, idx: Index) {
             fill_bits(b, d + n, dw as usize, true);
         }
     }
+    // 出力先の幅より上のビットは書いていないので正規化する (plan.md §3.2)。
+    normalize_plane(dw, a);
+    normalize_plane(dw, b);
 }
 
 /// ビット選択の読み (§11.5.1)。範囲外または `Unknown` なら X。
@@ -403,6 +407,29 @@ mod tests {
 
     fn lv(s: &str) -> LogicVec {
         LogicVec::from_bits_str(s).unwrap()
+    }
+
+    /// 出力先の幅より上のビットが汚れていても、`get_slice` の結果は正規化される (plan.md §3.2、§11.5.1)。
+    #[test]
+    fn get_slice_dirty_dst_is_normalized() {
+        let src = LogicVec::from_u64(100, 0xdead_beef);
+        for idx in [
+            Index::Unknown,
+            Index::Value(-3),
+            Index::Value(4),
+            Index::Value(90),
+        ] {
+            let (mut a, mut b) = ([!0u64; 2], [!0u64; 2]);
+            get_slice(LogicMut::new(70, &mut a, &mut b), src.as_ref(), idx);
+            assert!(LogicRef::new(70, &a, &b).is_normalized(), "{idx:?}");
+            let mut want = LogicVec::zero(70);
+            get_slice(want.as_mut(), src.as_ref(), idx);
+            assert_eq!(
+                LogicVec::from_ref(LogicRef::new(70, &a, &b)),
+                want,
+                "{idx:?}"
+            );
+        }
     }
 
     /// §11.5.1: 範囲外のビットは 4 値なら x、2 値なら 0。

@@ -5,9 +5,10 @@
 //! - 複製 `{n{a}}`: `n = 0` は幅 0 の値になる (連結の中でだけ許される。その検査は sema が行う)。
 //! - データを移すだけの演算なので、X/Z はそのまま運ぶ。
 
-use crate::ops::shift::copy_bits;
+use crate::layout::normalize_plane;
 use crate::vec::{BitVec, LogicVec};
 use crate::view::{BitMut, BitRef, LogicMut, LogicRef};
+use crate::words::copy_bits;
 
 fn check_concat_width(f: &str, dst: u32, sum: u64) {
     assert_eq!(
@@ -34,6 +35,7 @@ pub fn concat(dst: LogicMut<'_>, parts: &[LogicRef<'_>]) {
         dst.width(),
         parts.iter().map(|p| p.width() as u64).sum(),
     );
+    let dw = dst.width();
     let (a, b) = dst.into_planes();
     let mut off = 0usize;
     // LSB 側 (末尾の要素) から積む。
@@ -43,6 +45,9 @@ pub fn concat(dst: LogicMut<'_>, parts: &[LogicRef<'_>]) {
         copy_bits(b, off, p.bval(), 0, w);
         off += w;
     }
+    // 出力先の幅より上のビット (最上位ワードの未使用ビット) は書いていないので正規化する (plan.md §3.2)。
+    normalize_plane(dw, a);
+    normalize_plane(dw, b);
 }
 
 /// 2 値の [`concat()`]。
@@ -55,6 +60,7 @@ pub fn concat2(dst: BitMut<'_>, parts: &[BitRef<'_>]) {
         dst.width(),
         parts.iter().map(|p| p.width() as u64).sum(),
     );
+    let dw = dst.width();
     let a = dst.into_words();
     let mut off = 0usize;
     for p in parts.iter().rev() {
@@ -62,6 +68,7 @@ pub fn concat2(dst: BitMut<'_>, parts: &[BitRef<'_>]) {
         copy_bits(a, off, p.words(), 0, w);
         off += w;
     }
+    normalize_plane(dw, a);
 }
 
 /// `dst = {n{x}}` (§11.4.12.1)。`n = 0` なら `dst` は幅 0。
@@ -70,12 +77,15 @@ pub fn concat2(dst: BitMut<'_>, parts: &[BitRef<'_>]) {
 /// `dst` の幅が `x.width() * n` でない場合。
 pub fn replicate(dst: LogicMut<'_>, x: LogicRef<'_>, n: u32) {
     check_replicate_width("replicate", dst.width(), x.width(), n);
+    let dw = dst.width();
     let (a, b) = dst.into_planes();
     let w = x.width() as usize;
     for k in 0..n as usize {
         copy_bits(a, k * w, x.aval(), 0, w);
         copy_bits(b, k * w, x.bval(), 0, w);
     }
+    normalize_plane(dw, a);
+    normalize_plane(dw, b);
 }
 
 /// 2 値の [`replicate`]。
@@ -84,11 +94,13 @@ pub fn replicate(dst: LogicMut<'_>, x: LogicRef<'_>, n: u32) {
 /// `dst` の幅が `x.width() * n` でない場合。
 pub fn replicate2(dst: BitMut<'_>, x: BitRef<'_>, n: u32) {
     check_replicate_width("replicate2", dst.width(), x.width(), n);
+    let dw = dst.width();
     let a = dst.into_words();
     let w = x.width() as usize;
     for k in 0..n as usize {
         copy_bits(a, k * w, x.words(), 0, w);
     }
+    normalize_plane(dw, a);
 }
 
 /// 幅の和 (`MAX_WIDTH` を超えれば `LogicVec::zero` が panic する)。
@@ -162,6 +174,38 @@ mod tests {
 
     fn lv(s: &str) -> LogicVec {
         LogicVec::from_bits_str(s).unwrap()
+    }
+
+    /// 出力先の幅より上のビットが汚れていても、結果は正規化される (plan.md §3.2、§11.4.12)。
+    #[test]
+    fn dirty_dst_is_normalized() {
+        let x = lv("1x0z1");
+        let y = LogicVec::from_u64(60, 0x0123_4567_89ab_cdef);
+        let (mut a, mut b) = ([!0u64; 2], [!0u64; 2]);
+        concat(LogicMut::new(65, &mut a, &mut b), &[x.as_ref(), y.as_ref()]);
+        assert!(LogicRef::new(65, &a, &b).is_normalized());
+        assert_eq!(
+            LogicVec::from_ref(LogicRef::new(65, &a, &b)),
+            LogicVec::concat(&[&x, &y])
+        );
+        let (mut a, mut b) = ([!0u64; 2], [!0u64; 2]);
+        replicate(LogicMut::new(70, &mut a, &mut b), x.as_ref(), 14);
+        assert!(LogicRef::new(70, &a, &b).is_normalized());
+        assert_eq!(
+            LogicVec::from_ref(LogicRef::new(70, &a, &b)),
+            x.replicate(14)
+        );
+        let x2 = BitVec::from_u64(5, 0b10110);
+        let mut w = [!0u64; 2];
+        concat2(
+            BitMut::new(70, &mut w),
+            &[x2.as_ref(), BitVec::zero(65).as_ref()],
+        );
+        assert!(BitRef::new(70, &w).is_normalized());
+        let mut w = [!0u64; 2];
+        replicate2(BitMut::new(70, &mut w), x2.as_ref(), 14);
+        assert!(BitRef::new(70, &w).is_normalized());
+        assert_eq!(BitVec::from_ref(BitRef::new(70, &w)), x2.replicate(14));
     }
 
     /// §11.4.12 / §11.4.12.1: 先頭が MSB 側、幅 0 は無視、`{3{2'b1z}}`。

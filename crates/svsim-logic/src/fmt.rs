@@ -24,11 +24,10 @@
 //! 幅 0 の値 (連結の外では呼び出し側の誤り) は panic せず、`%b %o %h` は空、`%d` は `0` を表示する。
 
 use crate::layout::words_for;
-use crate::ops::shift::read_bits;
 use crate::scratch::Scratch;
 use crate::vec::{BitVec, LogicVec};
 use crate::view::{BitRef, LogicRef};
-use crate::words;
+use crate::words::{self, read_bits};
 
 /// 表示の基数。
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

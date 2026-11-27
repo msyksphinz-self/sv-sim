@@ -16,60 +16,9 @@ use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
 use svsim_logic::ops::reduce::LogicSet;
 use svsim_logic::ops::{bitwise, edge, logical, reduce};
-use svsim_logic::scalar::mask;
 use svsim_logic::{BitMut, BitRef, BitVec, L64, Logic, LogicMut, LogicRef, LogicVec};
 use svsim_logic_ref as r;
-use svsim_logic_ref::{RefEdge, RefLogic, RefVec};
-
-// ===========================================================================
-// 参照モデルとの変換 (tests/common に無いもの。ローカルに置く)
-// ===========================================================================
-
-fn rl(v: Logic) -> RefLogic {
-    match v {
-        Logic::L0 => RefLogic::Zero,
-        Logic::L1 => RefLogic::One,
-        Logic::X => RefLogic::X,
-        Logic::Z => RefLogic::Z,
-    }
-}
-
-fn rb(b: bool) -> RefLogic {
-    RefLogic::from_bool(b)
-}
-
-fn re(e: edge::Edge) -> RefEdge {
-    match e {
-        edge::Edge::None => RefEdge::None,
-        edge::Edge::Pos => RefEdge::Pos,
-        edge::Edge::Neg => RefEdge::Neg,
-    }
-}
-
-/// 2 値の層 1 の結果を検査する (正規化と参照モデルとの一致)。
-fn check_u64_ref(got: u64, w: u32, want: &RefVec, ctx: &str) -> Result<(), TestCaseError> {
-    prop_assert_eq!(got & !mask(w), 0, "{}: u64 not normalized", ctx);
-    check_eq_ref2(BitVec::from_u64(w, got).as_ref(), want, ctx)
-}
-
-/// 幅 `w` の 4 値の全値 (4^w 個)。
-fn all_logic(w: u32) -> Vec<LogicVec> {
-    (0..4usize.pow(w))
-        .map(|mut n| {
-            let mut v = LogicVec::zero(w);
-            for i in 0..w {
-                v.set_bit(i, Logic::ALL[n % 4]);
-                n /= 4;
-            }
-            v
-        })
-        .collect()
-}
-
-/// 幅 `w` の 2 値の全値。
-fn all_bits(w: u32) -> Vec<BitVec> {
-    (0..1u64 << w).map(|n| BitVec::from_u64(w, n)).collect()
-}
+use svsim_logic_ref::{RefLogic, RefVec};
 
 // ===========================================================================
 // ビット演算 (§11.4.8)
@@ -228,7 +177,7 @@ fn check_bin2(op: Bin, x: &BitVec, y: &BitVec) -> Result<(), TestCaseError> {
 
     if w <= 64 {
         let got = op.b1(to_u64_scalar(x), to_u64_scalar(y), w);
-        check_u64_ref(got, w, &want, &format!("{ctx} L1"))?;
+        check_eq_ref_u64(got, w, &want, &format!("{ctx} L1"))?;
     }
     Ok(())
 }
@@ -239,7 +188,8 @@ fn check_not(x: &LogicVec) -> Result<(), TestCaseError> {
     let ctx = format!("not w={w} x={x:?}");
     let want = r::not(&to_ref(x));
     let x0 = x.clone();
-    check_eq_ref(x.not().as_ref(), &want, &format!("{ctx} L3"))?;
+    check_eq_ref((!x).as_ref(), &want, &format!("{ctx} L3"))?;
+    check_eq_ref((!x.clone()).as_ref(), &want, &format!("{ctx} L3 owned"))?;
     let mut z = x.clone();
     z.not_assign();
     check_eq_ref(z.as_ref(), &want, &format!("{ctx} L3 assign"))?;
@@ -267,7 +217,8 @@ fn check_not2(x: &BitVec) -> Result<(), TestCaseError> {
     let w = x.width();
     let ctx = format!("not2 w={w} x={x:?}");
     let want = r::to_two_state(&r::not(&bits_to_ref(x)));
-    check_eq_ref2(x.not().as_ref(), &want, &format!("{ctx} L3"))?;
+    check_eq_ref2((!x).as_ref(), &want, &format!("{ctx} L3"))?;
+    check_eq_ref2((!x.clone()).as_ref(), &want, &format!("{ctx} L3 owned"))?;
     let mut z = x.clone();
     z.not_assign();
     check_eq_ref2(z.as_ref(), &want, &format!("{ctx} L3 assign"))?;
@@ -280,7 +231,7 @@ fn check_not2(x: &BitVec) -> Result<(), TestCaseError> {
     check_eq_ref2(d.as_ref(), &want, &format!("{ctx} L2 assign"))?;
     if w <= 64 {
         let got = bitwise::not2_l64(to_u64_scalar(x), w);
-        check_u64_ref(got, w, &want, &format!("{ctx} L1"))?;
+        check_eq_ref_u64(got, w, &want, &format!("{ctx} L1"))?;
     }
     Ok(())
 }
@@ -381,10 +332,10 @@ fn check_reductions(x: &LogicVec) -> Result<(), TestCaseError> {
     for op in REDS {
         let ctx = format!("{op:?} w={w} x={x:?}");
         let want = op.reference(&rx);
-        prop_assert_eq!(rl(op.l3(x)), want, "{} L3", ctx);
-        prop_assert_eq!(rl(op.l2(sx.as_ref())), want, "{} L2", ctx);
+        prop_assert_eq!(logic_to_ref(op.l3(x)), want, "{} L3", ctx);
+        prop_assert_eq!(logic_to_ref(op.l2(sx.as_ref())), want, "{} L2", ctx);
         if w <= 64 {
-            prop_assert_eq!(rl(op.l1(to_l64(x), w)), want, "{} L1", ctx);
+            prop_assert_eq!(logic_to_ref(op.l1(to_l64(x), w)), want, "{} L1", ctx);
         }
     }
     Ok(())
@@ -397,10 +348,10 @@ fn check_reductions2(x: &BitVec) -> Result<(), TestCaseError> {
     for op in REDS {
         let ctx = format!("{op:?}2 w={w} x={x:?}");
         let want = op.reference(&rx);
-        prop_assert_eq!(rb(op.b3(x)), want, "{} L3", ctx);
-        prop_assert_eq!(rb(op.b2(sx.as_ref())), want, "{} L2", ctx);
+        prop_assert_eq!(bool_to_ref(op.b3(x)), want, "{} L3", ctx);
+        prop_assert_eq!(bool_to_ref(op.b2(sx.as_ref())), want, "{} L2", ctx);
         if w <= 64 {
-            prop_assert_eq!(rb(op.b1(to_u64_scalar(x), w)), want, "{} L1", ctx);
+            prop_assert_eq!(bool_to_ref(op.b1(to_u64_scalar(x), w)), want, "{} L1", ctx);
         }
     }
     Ok(())
@@ -417,7 +368,7 @@ fn set_from_mask(m: u8) -> (LogicSet, Vec<RefLogic>) {
         .filter(|v| m & (1 << v.to_u8()) != 0)
         .collect();
     let set = LogicSet::of(&vals);
-    (set, vals.into_iter().map(rl).collect())
+    (set, vals.into_iter().map(logic_to_ref).collect())
 }
 
 fn check_counts(x: &LogicVec, set_mask: u8) -> Result<(), TestCaseError> {
@@ -491,19 +442,29 @@ fn check_truth(x: &LogicVec) -> Result<(), TestCaseError> {
     let want = r::truth(&rx);
     let want_not = r::logical_not(&rx);
     let sx = SplitLogic::from_vec(x);
-    prop_assert_eq!(rl(x.truth()), want, "{} L3", ctx);
-    prop_assert_eq!(rl(logical::truth(sx.as_ref())), want, "{} L2", ctx);
-    prop_assert_eq!(rl(x.logical_not()), want_not, "{} ! L3", ctx);
+    prop_assert_eq!(logic_to_ref(x.truth()), want, "{} L3", ctx);
     prop_assert_eq!(
-        rl(logical::logical_not(sx.as_ref())),
+        logic_to_ref(logical::truth(sx.as_ref())),
+        want,
+        "{} L2",
+        ctx
+    );
+    prop_assert_eq!(logic_to_ref(x.logical_not()), want_not, "{} ! L3", ctx);
+    prop_assert_eq!(
+        logic_to_ref(logical::logical_not(sx.as_ref())),
         want_not,
         "{} ! L2",
         ctx
     );
     if w <= 64 {
         let l = to_l64(x);
-        prop_assert_eq!(rl(logical::truth_l64(l, w)), want, "{} L1", ctx);
-        prop_assert_eq!(rl(logical::logical_not_l64(l, w)), want_not, "{} L1", ctx);
+        prop_assert_eq!(logic_to_ref(logical::truth_l64(l, w)), want, "{} L1", ctx);
+        prop_assert_eq!(
+            logic_to_ref(logical::logical_not_l64(l, w)),
+            want_not,
+            "{} L1",
+            ctx
+        );
     }
     Ok(())
 }
@@ -514,19 +475,24 @@ fn check_truth2(x: &BitVec) -> Result<(), TestCaseError> {
     let rx = bits_to_ref(x);
     let want = r::truth(&rx);
     let want_not = r::logical_not(&rx);
-    prop_assert_eq!(rb(x.truth()), want, "{} L3", ctx);
-    prop_assert_eq!(rb(logical::truth2(x.as_ref())), want, "{} L2", ctx);
-    prop_assert_eq!(rb(x.logical_not()), want_not, "{} L3", ctx);
+    prop_assert_eq!(bool_to_ref(x.truth()), want, "{} L3", ctx);
+    prop_assert_eq!(bool_to_ref(logical::truth2(x.as_ref())), want, "{} L2", ctx);
+    prop_assert_eq!(bool_to_ref(x.logical_not()), want_not, "{} L3", ctx);
     prop_assert_eq!(
-        rb(logical::logical_not2(x.as_ref())),
+        bool_to_ref(logical::logical_not2(x.as_ref())),
         want_not,
         "{} L2",
         ctx
     );
     if w <= 64 {
         let v = to_u64_scalar(x);
-        prop_assert_eq!(rb(logical::truth2_l64(v, w)), want, "{} L1", ctx);
-        prop_assert_eq!(rb(logical::logical_not2_l64(v, w)), want_not, "{} L1", ctx);
+        prop_assert_eq!(bool_to_ref(logical::truth2_l64(v, w)), want, "{} L1", ctx);
+        prop_assert_eq!(
+            bool_to_ref(logical::logical_not2_l64(v, w)),
+            want_not,
+            "{} L1",
+            ctx
+        );
     }
     Ok(())
 }
@@ -536,15 +502,30 @@ fn check_logical_binary(x: &LogicVec, y: &LogicVec) -> Result<(), TestCaseError>
     let ctx = format!("logical x={x:?} y={y:?}");
     let (rx, ry) = (to_ref(x), to_ref(y));
     let (tx, ty) = (x.truth(), y.truth());
-    prop_assert_eq!(rl(tx.and(ty)), r::logical_and(&rx, &ry), "{} &&", ctx);
-    prop_assert_eq!(rl(tx.or(ty)), r::logical_or(&rx, &ry), "{} ||", ctx);
     prop_assert_eq!(
-        rl(tx.implies(ty)),
+        logic_to_ref(tx.and(ty)),
+        r::logical_and(&rx, &ry),
+        "{} &&",
+        ctx
+    );
+    prop_assert_eq!(
+        logic_to_ref(tx.or(ty)),
+        r::logical_or(&rx, &ry),
+        "{} ||",
+        ctx
+    );
+    prop_assert_eq!(
+        logic_to_ref(tx.implies(ty)),
         r::logical_implies(&rx, &ry),
         "{} ->",
         ctx
     );
-    prop_assert_eq!(rl(tx.equiv(ty)), r::logical_equiv(&rx, &ry), "{} <->", ctx);
+    prop_assert_eq!(
+        logic_to_ref(tx.equiv(ty)),
+        r::logical_equiv(&rx, &ry),
+        "{} <->",
+        ctx
+    );
     Ok(())
 }
 
@@ -557,15 +538,20 @@ fn check_edge_lsb(old: &LogicVec, new: &LogicVec) -> Result<(), TestCaseError> {
     let want = r::edge_lsb(&to_ref(old), &to_ref(new));
     let (so, sn) = (SplitLogic::from_vec(old), SplitLogic::from_vec(new));
     prop_assert_eq!(
-        re(edge::edge_lsb(so.as_ref(), sn.as_ref())),
+        edge_to_ref(edge::edge_lsb(so.as_ref(), sn.as_ref())),
         want,
         "{} L2",
         ctx
     );
-    prop_assert_eq!(re(edge::edge(old.bit(0), new.bit(0))), want, "{} bit", ctx);
+    prop_assert_eq!(
+        edge_to_ref(edge::edge(old.bit(0), new.bit(0))),
+        want,
+        "{} bit",
+        ctx
+    );
     if old.width() <= 64 && new.width() <= 64 {
         prop_assert_eq!(
-            re(edge::edge_l64(to_l64(old), to_l64(new))),
+            edge_to_ref(edge::edge_l64(to_l64(old), to_l64(new))),
             want,
             "{} L1",
             ctx
@@ -578,15 +564,20 @@ fn check_edge_lsb2(old: &BitVec, new: &BitVec) -> Result<(), TestCaseError> {
     let ctx = format!("edge_lsb2 old={old:?} new={new:?}");
     let want = r::edge_lsb(&bits_to_ref(old), &bits_to_ref(new));
     prop_assert_eq!(
-        re(edge::edge_lsb2(old.as_ref(), new.as_ref())),
+        edge_to_ref(edge::edge_lsb2(old.as_ref(), new.as_ref())),
         want,
         "{}",
         ctx
     );
-    prop_assert_eq!(re(edge::edge2(old.bit(0), new.bit(0))), want, "{}", ctx);
+    prop_assert_eq!(
+        edge_to_ref(edge::edge2(old.bit(0), new.bit(0))),
+        want,
+        "{}",
+        ctx
+    );
     if old.width() <= 64 && new.width() <= 64 {
         let got = edge::edge2_l64(to_u64_scalar(old), to_u64_scalar(new));
-        prop_assert_eq!(re(got), want, "{} L1", ctx);
+        prop_assert_eq!(edge_to_ref(got), want, "{} L1", ctx);
     }
     Ok(())
 }
@@ -652,12 +643,28 @@ fn tc22_exhaustive_logical_binary() {
 #[test]
 fn tc22_exhaustive_logic_scalar_methods() {
     for a in Logic::ALL {
-        assert_eq!(rl(a.not()), !rl(a), "!{a}");
+        assert_eq!(logic_to_ref(a.not()), !logic_to_ref(a), "!{a}");
         for b in Logic::ALL {
-            assert_eq!(rl(a.and(b)), rl(a).and(rl(b)), "{a}&&{b}");
-            assert_eq!(rl(a.or(b)), rl(a).or(rl(b)), "{a}||{b}");
-            assert_eq!(rl(a.implies(b)), rl(a).implies(rl(b)), "{a}->{b}");
-            assert_eq!(rl(a.equiv(b)), rl(a).equiv(rl(b)), "{a}<->{b}");
+            assert_eq!(
+                logic_to_ref(a.and(b)),
+                logic_to_ref(a).and(logic_to_ref(b)),
+                "{a}&&{b}"
+            );
+            assert_eq!(
+                logic_to_ref(a.or(b)),
+                logic_to_ref(a).or(logic_to_ref(b)),
+                "{a}||{b}"
+            );
+            assert_eq!(
+                logic_to_ref(a.implies(b)),
+                logic_to_ref(a).implies(logic_to_ref(b)),
+                "{a}->{b}"
+            );
+            assert_eq!(
+                logic_to_ref(a.equiv(b)),
+                logic_to_ref(a).equiv(logic_to_ref(b)),
+                "{a}<->{b}"
+            );
         }
     }
 }

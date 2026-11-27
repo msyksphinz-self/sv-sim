@@ -9,10 +9,10 @@
 //! 目標幅は `dst` の幅。幅 0 の入力 (連結の外では呼び出し側の誤り) は 0 として扱い、panic しない。
 
 use crate::layout::normalize_plane;
-use crate::ops::shift::{copy_bits, fill_bits};
 use crate::scalar::{L64, mask};
 use crate::vec::{BitVec, LogicVec};
 use crate::view::{BitMut, BitRef, LogicMut, LogicRef};
+use crate::words::{copy_bits, fill_bits, sign_bit};
 
 /// 1 プレーンを拡張・切り詰めする。`fill` は拡張で埋める値。
 fn resize_plane(dst: &mut [u64], dw: u32, src: &[u64], sw: u32, fill: bool) {
@@ -22,21 +22,12 @@ fn resize_plane(dst: &mut [u64], dw: u32, src: &[u64], sw: u32, fill: bool) {
     normalize_plane(dw, dst);
 }
 
-#[inline]
-fn plane_msb(w: &[u64], width: u32) -> bool {
-    if width == 0 {
-        return false;
-    }
-    let i = width - 1;
-    (w[(i / 64) as usize] >> (i % 64)) & 1 != 0
-}
-
 /// `dst = x` を `dst` の幅に拡張・切り詰めしたもの (§11.6.1, §11.8.2, §6.24.1)。
 /// `signed` は `x` (拡張する前のオペランド) が符号付きか。
 pub fn resize(dst: LogicMut<'_>, x: LogicRef<'_>, signed: bool) {
     let (dw, sw) = (dst.width(), x.width());
     let (fa, fb) = if signed {
-        (plane_msb(x.aval(), sw), plane_msb(x.bval(), sw))
+        (sign_bit(x.aval(), sw), sign_bit(x.bval(), sw))
     } else {
         (false, false)
     };
@@ -48,7 +39,7 @@ pub fn resize(dst: LogicMut<'_>, x: LogicRef<'_>, signed: bool) {
 /// 2 値の [`resize`]。
 pub fn resize2(dst: BitMut<'_>, x: BitRef<'_>, signed: bool) {
     let (dw, sw) = (dst.width(), x.width());
-    let f = signed && plane_msb(x.words(), sw);
+    let f = signed && sign_bit(x.words(), sw);
     resize_plane(dst.into_words(), dw, x.words(), sw, f);
 }
 

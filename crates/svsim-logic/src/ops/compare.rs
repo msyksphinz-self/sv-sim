@@ -11,47 +11,32 @@
 //! | casez / casex ([`casez_match`], [`casex_match`]) | casez: どちらかが z のビットは無視し、残りを `===` で比べる。casex: どちらかが x/z のビットは無視する [要VCS確認 V-17] | §12.5.1 |
 //! | `< <= > >=` ([`lt`] ほか) | どちらかに未知があれば x。`signed` (両オペランドが符号付き、§11.8.1) のときだけ符号付きで比べる | §11.4.4 |
 //!
-//! 2 値版は名前の末尾に `2` を付け、`bool` を返す。層 1 は `_l64` 接尾辞。
+//! 2 値版は名前の末尾に `2` を付け、`bool` を返す。層 1 は `_l64` 接尾辞。層 3 の `==` `!=` は、
+//! `PartialEq` (`===` の意味) と紛らわしくないよう `LogicVec::{logic_eq, logic_ne}` /
+//! `BitVec::{bit_eq, bit_ne}` という名前にしている (M0-T14)。
 
 use std::cmp::Ordering;
 
 use crate::logic::Logic;
-use crate::ops::bitwise::check_same_width;
+use crate::ops::check_same_width;
 use crate::scalar::{L64, sign_extend};
 use crate::vec::{BitVec, LogicVec};
 use crate::view::{BitRef, LogicRef};
+use crate::words;
 
 // ===========================================================================
 // ワード単位の補助
 // ===========================================================================
 
 /// 既知の値 (2 値のワード列) の大小比較。幅 `w` で正規化されていること。
-/// `signed` なら 2 の補数として比べる。
+/// `signed` なら 2 の補数として比べる (§11.8.1)。
+#[inline]
 fn cmp_words(x: &[u64], y: &[u64], w: u32, signed: bool) -> Ordering {
-    if w == 0 {
-        return Ordering::Equal;
-    }
     if signed {
-        let top = ((w - 1) / 64) as usize;
-        let sh = (w - 1) % 64;
-        let sx = (x[top] >> sh) & 1 != 0;
-        let sy = (y[top] >> sh) & 1 != 0;
-        if sx != sy {
-            // 負のほうが小さい。符号が同じなら、2 の補数の順序は符号なしの順序と一致する。
-            return if sx {
-                Ordering::Less
-            } else {
-                Ordering::Greater
-            };
-        }
+        words::cmp_signed(x, y, w)
+    } else {
+        words::cmp(x, y)
     }
-    for (a, b) in x.iter().rev().zip(y.iter().rev()) {
-        match a.cmp(b) {
-            Ordering::Equal => {}
-            o => return o,
-        }
-    }
-    Ordering::Equal
 }
 
 /// `==` の判定 (ワード列)。`(known_mismatch, any_unknown)` の畳み込み。
@@ -457,17 +442,22 @@ rel2! {
 // 層 3
 // ===========================================================================
 
-/// 注意: [`LogicVec::eq`] / [`BitVec::eq`] は `PartialEq::eq` をメソッド呼び出しで隠す
-/// (`==` 演算子は `PartialEq` のまま、つまり `===` の意味)。
+/// 注意: 4 値の論理等価 `==` / `!=` (§11.4.5) は [`LogicVec::logic_eq`] / [`LogicVec::logic_ne`]。
+/// `PartialEq` (`==` 演算子と `.eq()`) は「幅と全ビットが同一」で、`===` の意味
+/// ([`LogicVec::case_eq`] と同じ。ただし幅が違っても panic しない)。
 impl LogicVec {
-    /// `self == y` (§11.4.5)。`PartialEq` (`==` 演算子、`===` の意味) とは別物。
-    #[allow(clippy::should_implement_trait)] // 層 3 の名前は層 2 のカーネルと揃える (plan.md §3.3)
-    pub fn eq(&self, y: &LogicVec) -> Logic {
+    /// `self == y` (§11.4.5、論理等価。X/Z があれば x になりうる)。`PartialEq` とは別物。
+    ///
+    /// # Panics
+    /// 幅が違う場合。
+    pub fn logic_eq(&self, y: &LogicVec) -> Logic {
         eq(self.as_ref(), y.as_ref())
     }
-    /// `self != y` (§11.4.5)。
-    #[allow(clippy::should_implement_trait)]
-    pub fn ne(&self, y: &LogicVec) -> Logic {
+    /// `self != y` (§11.4.5、論理等価の否定)。
+    ///
+    /// # Panics
+    /// 幅が違う場合。
+    pub fn logic_ne(&self, y: &LogicVec) -> Logic {
         ne(self.as_ref(), y.as_ref())
     }
     /// `self === y` (§11.4.5)。幅が違えば panic する点を除き `PartialEq` と同じ。
@@ -514,13 +504,17 @@ impl LogicVec {
 
 impl BitVec {
     /// 2 値の `self == y` (§11.4.5)。幅が違えば panic する点を除き `PartialEq` と同じ。
-    #[allow(clippy::should_implement_trait)] // 層 3 の名前は層 2 のカーネルと揃える (plan.md §3.3)
-    pub fn eq(&self, y: &BitVec) -> bool {
+    ///
+    /// # Panics
+    /// 幅が違う場合。
+    pub fn bit_eq(&self, y: &BitVec) -> bool {
         eq2(self.as_ref(), y.as_ref())
     }
     /// 2 値の `self != y` (§11.4.5)。
-    #[allow(clippy::should_implement_trait)]
-    pub fn ne(&self, y: &BitVec) -> bool {
+    ///
+    /// # Panics
+    /// 幅が違う場合。
+    pub fn bit_ne(&self, y: &BitVec) -> bool {
         ne2(self.as_ref(), y.as_ref())
     }
     /// 2 値の `self === y` (§11.4.5)。
@@ -577,10 +571,10 @@ mod tests {
     /// §11.4.5 の例 [要VCS確認 V-15]。
     #[test]
     fn equality_11_4_5() {
-        assert_eq!(v("1010").eq(&v("1010")), I);
-        assert_eq!(v("1x00").eq(&v("0x00")), O);
-        assert_eq!(v("1x00").eq(&v("1000")), X);
-        assert_eq!(v("1z00").ne(&v("1z00")), X);
+        assert_eq!(v("1010").logic_eq(&v("1010")), I);
+        assert_eq!(v("1x00").logic_eq(&v("0x00")), O);
+        assert_eq!(v("1x00").logic_eq(&v("1000")), X);
+        assert_eq!(v("1z00").logic_ne(&v("1z00")), X);
         assert!(v("1z00").case_eq(&v("1z00")));
         assert!(!v("1z00").case_eq(&v("1x00")));
     }

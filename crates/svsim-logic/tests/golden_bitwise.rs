@@ -55,7 +55,7 @@ fn tc13_tables_11_4_8() {
     let not_t = [I, O, X, X];
     for (i, &x) in order.iter().enumerate() {
         let xv = LogicVec::from(x);
-        assert_eq!(xv.not().bit(0), not_t[i], "~{x}");
+        assert_eq!((!&xv).bit(0), not_t[i], "~{x}");
         assert_eq!(bitwise::not_l64(L64::filled(x, 1), 1).bit(0), not_t[i]);
         for (j, &y) in order.iter().enumerate() {
             let yv = LogicVec::from(y);
@@ -82,7 +82,7 @@ fn tc13_vectors_11_4_8() {
     assert_eq!(p.or(&q).to_u64(), Some(0xfc));
     assert_eq!(p.xor(&q).to_u64(), Some(0xcc));
     assert_eq!(p.xnor(&q).to_u64(), Some(0x33));
-    assert_eq!(p.not().to_u64(), Some(0x0f));
+    assert_eq!((!&p).to_u64(), Some(0x0f));
 }
 
 // ===========================================================================
@@ -94,7 +94,7 @@ fn tc13_vectors_11_4_8() {
 fn tc12_normalized_outputs_bitwise() {
     for w in [1, 63, 65, 127, 129] {
         let z = LogicVec::zero(w);
-        let n = z.not();
+        let n = !&z;
         assert!(n.as_ref().is_normalized(), "not w={w}");
         assert_eq!(n, LogicVec::filled(w, I));
         let xn = z.xnor(&z);
@@ -108,7 +108,7 @@ fn tc12_normalized_outputs_bitwise() {
         let mut a = z.clone();
         a.not_assign();
         assert!(a.as_ref().is_normalized(), "not_assign w={w}");
-        let nb = BitVec::zero(w).not();
+        let nb = !BitVec::zero(w);
         assert!(nb.as_ref().is_normalized(), "not2 w={w}");
         assert_eq!(nb, BitVec::filled(w, true));
         assert!(
@@ -275,8 +275,8 @@ fn tc16_equality_11_4_5() {
     ];
     for (x, y, eq, ne, ceq) in rows {
         let (x, y) = (v(x), v(y));
-        assert_eq!(x.eq(&y), eq, "{x:?}=={y:?}");
-        assert_eq!(x.ne(&y), ne, "{x:?}!={y:?}");
+        assert_eq!(x.logic_eq(&y), eq, "{x:?}=={y:?}");
+        assert_eq!(x.logic_ne(&y), ne, "{x:?}!={y:?}");
         assert_eq!(x.case_eq(&y), ceq, "{x:?}==={y:?}");
         assert_eq!(x.case_ne(&y), !ceq, "{x:?}!=={y:?}");
     }
@@ -284,8 +284,8 @@ fn tc16_equality_11_4_5() {
     let p = pattern(129);
     let mut q = p.clone();
     q.set_bit(128, if p.bit(128) == I { O } else { I });
-    assert_eq!(p.eq(&q), O);
-    assert_eq!(p.ne(&q), I);
+    assert_eq!(p.logic_eq(&q), O);
+    assert_eq!(p.logic_ne(&q), I);
     assert!(!p.case_eq(&q));
     assert!(p.case_ne(&q));
     // 129 ビット: bit 128 が x (両方)、他の既知ビットで 1 か所不一致 [要VCS確認 V-15]
@@ -293,13 +293,13 @@ fn tc16_equality_11_4_5() {
     p.set_bit(128, X);
     let mut q = p.clone();
     q.set_bit(5, if p.bit(5) == I { O } else { I });
-    assert_eq!(p.eq(&q), O);
-    assert_eq!(p.ne(&q), I);
+    assert_eq!(p.logic_eq(&q), O);
+    assert_eq!(p.logic_ne(&q), I);
     assert!(!p.case_eq(&q));
     assert!(p.case_ne(&q));
     // 2 値
-    assert!(b("1010").eq(&b("1010")));
-    assert!(b("1010").ne(&b("1011")));
+    assert!(b("1010").bit_eq(&b("1010")));
+    assert!(b("1010").bit_ne(&b("1011")));
 }
 
 // ===========================================================================
@@ -528,7 +528,7 @@ fn tc21_edge_lsb_9_4_2() {
 #[test]
 #[should_panic(expected = "eq: width mismatch (64 vs 65)")]
 fn tc57_eq_width_mismatch_panics() {
-    let _ = LogicVec::zero(64).eq(&LogicVec::zero(65));
+    let _ = LogicVec::zero(64).logic_eq(&LogicVec::zero(65));
 }
 
 #[test]

@@ -21,24 +21,8 @@ use svsim_logic_ref as r;
 use svsim_logic_ref::RefVec;
 
 // ===========================================================================
-// ローカルの補助 (tests/common は読むだけ、plan.md §3.7)
+// ローカルの補助 (共通のものは tests/common にある)
 // ===========================================================================
-
-/// 2 値の期待値: 参照モデルの結果 → `to_two_state` (CR-5)。0 除算などの X は 0 になる (V-2)。
-fn two(x: &RefVec) -> RefVec {
-    r::to_two_state(x)
-}
-
-/// 入力が変わっていないこと (CR-7)。
-fn unchanged(before: &LogicVec, after: &LogicVec, ctx: &str) -> Result<(), TestCaseError> {
-    prop_assert!(before == after, "{}: input modified", ctx);
-    Ok(())
-}
-
-fn unchanged2(before: &BitVec, after: &BitVec, ctx: &str) -> Result<(), TestCaseError> {
-    prop_assert!(before == after, "{}: input modified", ctx);
-    Ok(())
-}
 
 #[derive(Clone, Copy, Debug)]
 enum Bin {
@@ -156,8 +140,8 @@ fn check_bin(op: Bin, x: &LogicVec, y: &LogicVec) -> Result<(), TestCaseError> {
         };
         check_eq_ref_l64(got, w, &want, &format!("{ctx} L1"))?;
     }
-    unchanged(&x0, x, ctx)?;
-    unchanged(&y0, y, ctx)?;
+    check_unchanged(&x0, x, ctx)?;
+    check_unchanged(&y0, y, ctx)?;
 
     // 2 値版 (X/Z を 0 にした入力、CR-5)
     let (x2, y2) = (x.to_bit_vec(), y.to_bit_vec());
@@ -169,7 +153,7 @@ fn check_bin2(op: Bin, x2: &BitVec, y2: &BitVec) -> Result<(), TestCaseError> {
     let ctx = format!("{op:?} 2-state w={w} x={x2:?} y={y2:?}");
     let ctx = ctx.as_str();
     let (x0, y0) = (x2.clone(), y2.clone());
-    let want2 = two(&ref_bin(op, &bits_to_ref(x2), &bits_to_ref(y2)));
+    let want2 = ref_two_state(&ref_bin(op, &bits_to_ref(x2), &bits_to_ref(y2)));
     let got = match op {
         Bin::Add => x2.add(y2),
         Bin::Sub => x2.sub(y2),
@@ -227,8 +211,8 @@ fn check_bin2(op: Bin, x2: &BitVec, y2: &BitVec) -> Result<(), TestCaseError> {
         );
         check_eq_ref2(v.as_ref(), &want2, &format!("{ctx} L1"))?;
     }
-    unchanged2(&x0, x2, ctx)?;
-    unchanged2(&y0, y2, ctx)?;
+    check_unchanged(&x0, x2, ctx)?;
+    check_unchanged(&y0, y2, ctx)?;
     Ok(())
 }
 
@@ -279,11 +263,11 @@ fn check_un(op: Un, x: &LogicVec) -> Result<(), TestCaseError> {
         };
         check_eq_ref_l64(got, w, &want, &format!("{ctx} L1"))?;
     }
-    unchanged(&x0, x, ctx)?;
+    check_unchanged(&x0, x, ctx)?;
 
     // 2 値版
     let x2 = x.to_bit_vec();
-    let want2 = two(&ref_un(op, &bits_to_ref(&x2)));
+    let want2 = ref_two_state(&ref_un(op, &bits_to_ref(&x2)));
     let got = match op {
         Un::Neg => x2.neg(),
         Un::Inc => x2.inc(),
@@ -350,8 +334,8 @@ fn check_pow(base: &LogicVec, bs: bool, exp: &LogicVec, es: bool) -> Result<(), 
         let got = arith::pow_l64(to_l64(base), w, bs, to_l64(exp), ew, es);
         check_eq_ref_l64(got, w, &want, &format!("{ctx} L1"))?;
     }
-    unchanged(&b0, base, ctx)?;
-    unchanged(&e0, exp, ctx)?;
+    check_unchanged(&b0, base, ctx)?;
+    check_unchanged(&e0, exp, ctx)?;
 
     // 混在 (2 値 base × 4 値の指数、CR-6): 参照モデルと、「from_two_state してから 4 値カーネル」の両方。
     let b2 = base.to_bit_vec();
@@ -375,7 +359,7 @@ fn check_pow(base: &LogicVec, bs: bool, exp: &LogicVec, es: bool) -> Result<(), 
 
     // 2 値版 (CR-5)
     let e2 = exp.to_bit_vec();
-    let want2 = two(&r::pow(&bits_to_ref(&b2), bs, &bits_to_ref(&e2), es));
+    let want2 = ref_two_state(&r::pow(&bits_to_ref(&b2), bs, &bits_to_ref(&e2), es));
     check_eq_ref2(
         b2.pow(bs, &e2, es).as_ref(),
         &want2,
@@ -399,12 +383,6 @@ fn check_pow(base: &LogicVec, bs: bool, exp: &LogicVec, es: bool) -> Result<(), 
 // 網羅 (TC28 E): 幅 1〜6 の 2 値の全組み合わせ
 // ===========================================================================
 
-fn unwrap_case(r: Result<(), TestCaseError>) {
-    if let Err(e) = r {
-        panic!("{e}");
-    }
-}
-
 #[test]
 fn exhaustive_binary_small_widths() {
     for w in 1u32..=6 {
@@ -412,7 +390,7 @@ fn exhaustive_binary_small_widths() {
             for b in 0..(1u64 << w) {
                 let (x, y) = (LogicVec::from_u64(w, a), LogicVec::from_u64(w, b));
                 for op in BIN_OPS {
-                    unwrap_case(check_bin(op, &x, &y));
+                    run_case(check_bin(op, &x, &y));
                 }
             }
         }
@@ -425,7 +403,7 @@ fn exhaustive_unary_small_widths() {
         for a in 0..(1u64 << w) {
             let x = LogicVec::from_u64(w, a);
             for op in UN_OPS {
-                unwrap_case(check_un(op, &x));
+                run_case(check_un(op, &x));
             }
         }
     }
@@ -441,7 +419,7 @@ fn exhaustive_pow_small_widths() {
                 for e in 0..(1u64 << ew) {
                     let exp = LogicVec::from_u64(ew, e);
                     for (bs, es) in [(false, false), (false, true), (true, false), (true, true)] {
-                        unwrap_case(check_pow(&base, bs, &exp, es));
+                        run_case(check_pow(&base, bs, &exp, es));
                     }
                 }
             }

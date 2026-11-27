@@ -18,106 +18,15 @@
 //! | 2 | [`shl`] [`shl_const`] [`shl_assign`] [`shl_const_assign`] … | [`shl2`] [`shl_const2`] [`shl_assign2`] … | [`shl_bits`] [`shr_bits`] [`ashr_bits`] |
 //! | 3 | [`LogicVec::shl`] … | [`BitVec::shl`] … | — |
 //!
-//! このファイルの末尾近くには、`resize`/`concat`/`select` と共有するビット列の補助関数
-//! (`pub(crate)`) も置く。`words.rs` (T3b) と統合するまでの暫定の置き場所。
+//! ビット列の補助 (`read_bits` 等) とワード列のシフト (`words::shl` 等) は `words.rs` (crate 内専用) にある
+//! (M0-T14 で統合)。
 
 use crate::layout::normalize_plane;
 use crate::logic::Logic;
 use crate::scalar::{L64, mask};
 use crate::vec::{BitVec, LogicVec};
 use crate::view::{BitMut, BitRef, LogicMut, LogicRef};
-
-// ===========================================================================
-// ビット列の補助関数 (pub(crate)。resize / concat / select と共有する)
-// ===========================================================================
-
-/// プレーン `src` のビット `off` から `n` ビット (`n <= 64`) を読む。`src` の外のビットは 0。
-#[inline]
-pub(crate) fn read_bits(src: &[u64], off: usize, n: usize) -> u64 {
-    debug_assert!(n <= 64);
-    if n == 0 {
-        return 0;
-    }
-    let wi = off / 64;
-    let b = off % 64;
-    let lo = src.get(wi).copied().unwrap_or(0) >> b;
-    let hi = if b != 0 {
-        src.get(wi + 1).copied().unwrap_or(0) << (64 - b)
-    } else {
-        0
-    };
-    (lo | hi) & mask(n as u32)
-}
-
-/// プレーン `dst` のビット `off` から `n` ビット (`n <= 64`) に `v` の下位 `n` ビットを書く。
-/// `off + n` は `dst` の長さ (ビット) 以下であること。
-#[inline]
-pub(crate) fn write_bits(dst: &mut [u64], off: usize, n: usize, v: u64) {
-    debug_assert!(n <= 64);
-    if n == 0 {
-        return;
-    }
-    let m = mask(n as u32);
-    let v = v & m;
-    let wi = off / 64;
-    let b = off % 64;
-    dst[wi] = (dst[wi] & !(m << b)) | (v << b);
-    if b + n > 64 {
-        let r = 64 - b;
-        dst[wi + 1] = (dst[wi + 1] & !(m >> r)) | (v >> r);
-    }
-}
-
-/// `src` のビット `[soff, soff + len)` を `dst` のビット `[doff, doff + len)` に写す。
-pub(crate) fn copy_bits(dst: &mut [u64], doff: usize, src: &[u64], soff: usize, len: usize) {
-    if doff.is_multiple_of(64) && soff.is_multiple_of(64) {
-        // ワード境界が揃っている場合はワード単位で写す。
-        let full = len / 64;
-        let (dw, sw) = (doff / 64, soff / 64);
-        dst[dw..dw + full].copy_from_slice(&src[sw..sw + full]);
-        let rest = len % 64;
-        if rest != 0 {
-            let v = read_bits(src, soff + full * 64, rest);
-            write_bits(dst, doff + full * 64, rest, v);
-        }
-        return;
-    }
-    let mut k = 0;
-    while k < len {
-        let n = (len - k).min(64);
-        let v = read_bits(src, soff + k, n);
-        write_bits(dst, doff + k, n, v);
-        k += n;
-    }
-}
-
-/// `dst` のビット `[lo, hi)` を `v` で埋める。
-pub(crate) fn fill_bits(dst: &mut [u64], lo: usize, hi: usize, v: bool) {
-    if lo >= hi {
-        return;
-    }
-    let fill = if v { !0u64 } else { 0 };
-    let (lw, lb) = (lo / 64, lo % 64);
-    let (hw, hb) = (hi / 64, hi % 64);
-    if lw == hw {
-        let m = mask((hb - lb) as u32) << lb;
-        dst[lw] = (dst[lw] & !m) | (fill & m);
-        return;
-    }
-    let m = !0u64 << lb;
-    dst[lw] = (dst[lw] & !m) | (fill & m);
-    dst[lw + 1..hw].fill(fill);
-    if hb != 0 {
-        let m = mask(hb as u32);
-        dst[hw] = (dst[hw] & !m) | (fill & m);
-    }
-}
-
-/// プレーンの全ワードが 0 か。
-#[inline]
-pub(crate) fn plane_is_zero(words: &[u64]) -> bool {
-    words.iter().all(|&w| w == 0)
-}
+use crate::words::{self, fill_bits, sign_bit};
 
 // ===========================================================================
 // シフト量
@@ -140,7 +49,7 @@ fn amount2(words: &[u64]) -> u64 {
     match words.split_first() {
         None => 0,
         Some((&lo, rest)) => {
-            if plane_is_zero(rest) {
+            if words::is_zero(rest) {
                 lo
             } else {
                 u64::MAX
@@ -150,65 +59,55 @@ fn amount2(words: &[u64]) -> u64 {
 }
 
 // ===========================================================================
-// プレーン単位の in-place シフト
+// プレーン単位のシフト
 // ===========================================================================
 
-/// プレーン `w` (幅 `width`、正規化済み) を in-place で左に `n` ビットずらす。空いたビットは 0。
-fn shl_plane(w: &mut [u64], width: u32, n: u64) {
+/// プレーン `d = s << n` (幅 `width`、`s` は正規化済み)。空いたビットは 0。1 パスで書く。
+fn shl_plane(d: &mut [u64], s: &[u64], width: u32, n: u64) {
+    if n >= width as u64 {
+        d.fill(0);
+        return;
+    }
+    words::shl(d, s, n);
+    normalize_plane(width, d);
+}
+
+/// [`shl_plane`] の in-place 版。
+fn shl_plane_assign(w: &mut [u64], width: u32, n: u64) {
     if n >= width as u64 {
         w.fill(0);
         return;
     }
-    let ws = (n / 64) as usize;
-    let bs = (n % 64) as u32;
-    let nw = w.len();
-    // 上位から書くので、読む位置 (i - ws, i - ws - 1 <= i) はまだ上書きされていない。
-    for i in (0..nw).rev() {
-        let lo = if i >= ws { w[i - ws] } else { 0 };
-        let v = if bs == 0 {
-            lo
-        } else {
-            let lower = if i > ws { w[i - ws - 1] } else { 0 };
-            (lo << bs) | (lower >> (64 - bs))
-        };
-        w[i] = v;
-    }
+    words::shl_assign(w, n);
     normalize_plane(width, w);
 }
 
-/// プレーン `w` (幅 `width`、正規化済み) を in-place で右に `n` ビットずらし、空いた上位ビットを
-/// `fill` で埋める。
-fn shr_plane(w: &mut [u64], width: u32, n: u64, fill: bool) {
+/// 右シフトの後始末: `n >= width` なら全体を `fill` にし、そうでなければ空いた上位 `n` ビットを
+/// `fill` で埋める。最後に正規化する。
+fn shr_plane_finish(w: &mut [u64], width: u32, n: u64, fill: bool) {
     if n >= width as u64 {
         w.fill(if fill { !0 } else { 0 });
-        normalize_plane(width, w);
-        return;
-    }
-    let ws = (n / 64) as usize;
-    let bs = (n % 64) as u32;
-    let nw = w.len();
-    // 下位から書くので、読む位置 (i + ws, i + ws + 1 >= i) はまだ上書きされていない。
-    for i in 0..nw {
-        let hi = w.get(i + ws).copied().unwrap_or(0);
-        let v = if bs == 0 {
-            hi
-        } else {
-            let upper = w.get(i + ws + 1).copied().unwrap_or(0);
-            (hi >> bs) | (upper << (64 - bs))
-        };
-        w[i] = v;
-    }
-    if fill {
+    } else if fill {
         fill_bits(w, (width as u64 - n) as usize, width as usize, true);
     }
     normalize_plane(width, w);
 }
 
-/// プレーンの最上位ビット (幅 `width >= 1`)。
-#[inline]
-fn msb(w: &[u64], width: u32) -> bool {
-    let i = width - 1;
-    (w[(i / 64) as usize] >> (i % 64)) & 1 != 0
+/// プレーン `d = s >> n` (幅 `width`、`s` は正規化済み) で、空いた上位ビットを `fill` で埋める。
+/// 1 パスで書く。
+fn shr_plane(d: &mut [u64], s: &[u64], width: u32, n: u64, fill: bool) {
+    if n < width as u64 {
+        words::shr(d, s, n);
+    }
+    shr_plane_finish(d, width, n, fill);
+}
+
+/// [`shr_plane`] の in-place 版。
+fn shr_plane_assign(w: &mut [u64], width: u32, n: u64, fill: bool) {
+    if n < width as u64 {
+        words::shr_assign(w, n);
+    }
+    shr_plane_finish(w, width, n, fill);
 }
 
 #[inline]
@@ -221,28 +120,40 @@ fn check_same_width(f: &str, dst: u32, x: u32) {
 // 層 2: 4 値
 // ===========================================================================
 
+/// 4 値の `dst = x << n` (シフト量は既知の `n`)。1 パスで書く。
+fn shl_into(mut dst: LogicMut<'_>, x: LogicRef<'_>, n: u64) {
+    let w = dst.width();
+    let (a, b) = dst.planes_mut();
+    shl_plane(a, x.aval(), w, n);
+    shl_plane(b, x.bval(), w, n);
+}
+
+/// 4 値の `dst = x >> n`。`arith` が真なら `x` の符号ビットの値 (X/Z もそのまま) で埋める。
+fn shr_into(mut dst: LogicMut<'_>, x: LogicRef<'_>, n: u64, arith: bool) {
+    let w = dst.width();
+    let fa = arith && sign_bit(x.aval(), w);
+    let fb = arith && sign_bit(x.bval(), w);
+    let (a, b) = dst.planes_mut();
+    shr_plane(a, x.aval(), w, n, fa);
+    shr_plane(b, x.bval(), w, n, fb);
+}
+
 /// 4 値の in-place 左シフト (シフト量は既知の `n`)。
 fn shl_in_place(mut d: LogicMut<'_>, n: u64) {
     let w = d.width();
     let (a, b) = d.planes_mut();
-    shl_plane(a, w, n);
-    shl_plane(b, w, n);
+    shl_plane_assign(a, w, n);
+    shl_plane_assign(b, w, n);
 }
 
 /// 4 値の in-place 右シフト。`arith` が真なら符号ビットの値で埋める。
 fn shr_in_place(mut d: LogicMut<'_>, n: u64, arith: bool) {
     let w = d.width();
-    if w == 0 {
-        return;
-    }
     let (a, b) = d.planes_mut();
-    let (fa, fb) = if arith {
-        (msb(a, w), msb(b, w))
-    } else {
-        (false, false)
-    };
-    shr_plane(a, w, n, fa);
-    shr_plane(b, w, n, fb);
+    let fa = arith && sign_bit(a, w);
+    let fb = arith && sign_bit(b, w);
+    shr_plane_assign(a, w, n, fa);
+    shr_plane_assign(b, w, n, fb);
 }
 
 /// `dst = x << amt` (`<<` と `<<<`、§11.4.10)。`x` と `dst` は同じ幅 (文脈決定)、`amt` は自己決定で
@@ -254,10 +165,7 @@ pub fn shl(mut dst: LogicMut<'_>, x: LogicRef<'_>, amt: LogicRef<'_>) {
     check_same_width("shl", dst.width(), x.width());
     match amount(amt) {
         None => dst.fill(Logic::X),
-        Some(n) => {
-            dst.copy_from(x);
-            shl_in_place(dst, n);
-        }
+        Some(n) => shl_into(dst, x, n),
     }
 }
 
@@ -269,10 +177,7 @@ pub fn shr(mut dst: LogicMut<'_>, x: LogicRef<'_>, amt: LogicRef<'_>) {
     check_same_width("shr", dst.width(), x.width());
     match amount(amt) {
         None => dst.fill(Logic::X),
-        Some(n) => {
-            dst.copy_from(x);
-            shr_in_place(dst, n, false);
-        }
+        Some(n) => shr_into(dst, x, n, false),
     }
 }
 
@@ -285,10 +190,7 @@ pub fn ashr(mut dst: LogicMut<'_>, x: LogicRef<'_>, amt: LogicRef<'_>, signed: b
     check_same_width("ashr", dst.width(), x.width());
     match amount(amt) {
         None => dst.fill(Logic::X),
-        Some(n) => {
-            dst.copy_from(x);
-            shr_in_place(dst, n, signed);
-        }
+        Some(n) => shr_into(dst, x, n, signed),
     }
 }
 
@@ -296,30 +198,27 @@ pub fn ashr(mut dst: LogicMut<'_>, x: LogicRef<'_>, amt: LogicRef<'_>, signed: b
 ///
 /// # Panics
 /// `dst` と `x` の幅が違う場合。
-pub fn shl_const(mut dst: LogicMut<'_>, x: LogicRef<'_>, n: u64) {
+pub fn shl_const(dst: LogicMut<'_>, x: LogicRef<'_>, n: u64) {
     check_same_width("shl_const", dst.width(), x.width());
-    dst.copy_from(x);
-    shl_in_place(dst, n);
+    shl_into(dst, x, n);
 }
 
 /// `dst = x >> n` (シフト量が定数の版)。
 ///
 /// # Panics
 /// `dst` と `x` の幅が違う場合。
-pub fn shr_const(mut dst: LogicMut<'_>, x: LogicRef<'_>, n: u64) {
+pub fn shr_const(dst: LogicMut<'_>, x: LogicRef<'_>, n: u64) {
     check_same_width("shr_const", dst.width(), x.width());
-    dst.copy_from(x);
-    shr_in_place(dst, n, false);
+    shr_into(dst, x, n, false);
 }
 
 /// `dst = x >>> n` (シフト量が定数の版)。
 ///
 /// # Panics
 /// `dst` と `x` の幅が違う場合。
-pub fn ashr_const(mut dst: LogicMut<'_>, x: LogicRef<'_>, n: u64, signed: bool) {
+pub fn ashr_const(dst: LogicMut<'_>, x: LogicRef<'_>, n: u64, signed: bool) {
     check_same_width("ashr_const", dst.width(), x.width());
-    dst.copy_from(x);
-    shr_in_place(dst, n, signed);
+    shr_into(dst, x, n, signed);
 }
 
 /// `x <<= amt` (in-place 版)。
@@ -365,79 +264,83 @@ pub fn ashr_const_assign(x: LogicMut<'_>, n: u64, signed: bool) {
 // 層 2: 2 値
 // ===========================================================================
 
+/// 2 値の `dst = x >> n` (1 パス)。`arith` が真なら `x` の符号ビットで埋める。
+fn shr2_into(mut dst: BitMut<'_>, x: BitRef<'_>, n: u64, arith: bool) {
+    let w = dst.width();
+    let f = arith && sign_bit(x.words(), w);
+    shr_plane(dst.words_mut(), x.words(), w, n, f);
+}
+
+/// 2 値の `dst = x << n` (1 パス)。
+fn shl2_into(mut dst: BitMut<'_>, x: BitRef<'_>, n: u64) {
+    let w = dst.width();
+    shl_plane(dst.words_mut(), x.words(), w, n);
+}
+
 fn shr2_in_place(mut d: BitMut<'_>, n: u64, arith: bool) {
     let w = d.width();
-    if w == 0 {
-        return;
-    }
     let a = d.words_mut();
-    let f = arith && msb(a, w);
-    shr_plane(a, w, n, f);
+    let f = arith && sign_bit(a, w);
+    shr_plane_assign(a, w, n, f);
 }
 
 fn shl2_in_place(mut d: BitMut<'_>, n: u64) {
     let w = d.width();
-    shl_plane(d.words_mut(), w, n);
+    shl_plane_assign(d.words_mut(), w, n);
 }
 
 /// 2 値の `dst = x << amt` (§11.4.10)。
 ///
 /// # Panics
 /// `dst` と `x` の幅が違う場合。
-pub fn shl2(mut dst: BitMut<'_>, x: BitRef<'_>, amt: BitRef<'_>) {
+pub fn shl2(dst: BitMut<'_>, x: BitRef<'_>, amt: BitRef<'_>) {
     check_same_width("shl2", dst.width(), x.width());
-    dst.copy_from(x);
-    shl2_in_place(dst, amount2(amt.words()));
+    shl2_into(dst, x, amount2(amt.words()));
 }
 
 /// 2 値の `dst = x >> amt` (§11.4.10)。
 ///
 /// # Panics
 /// `dst` と `x` の幅が違う場合。
-pub fn shr2(mut dst: BitMut<'_>, x: BitRef<'_>, amt: BitRef<'_>) {
+pub fn shr2(dst: BitMut<'_>, x: BitRef<'_>, amt: BitRef<'_>) {
     check_same_width("shr2", dst.width(), x.width());
-    dst.copy_from(x);
-    shr2_in_place(dst, amount2(amt.words()), false);
+    shr2_into(dst, x, amount2(amt.words()), false);
 }
 
 /// 2 値の `dst = x >>> amt` (§11.4.10)。
 ///
 /// # Panics
 /// `dst` と `x` の幅が違う場合。
-pub fn ashr2(mut dst: BitMut<'_>, x: BitRef<'_>, amt: BitRef<'_>, signed: bool) {
+pub fn ashr2(dst: BitMut<'_>, x: BitRef<'_>, amt: BitRef<'_>, signed: bool) {
     check_same_width("ashr2", dst.width(), x.width());
-    dst.copy_from(x);
-    shr2_in_place(dst, amount2(amt.words()), signed);
+    shr2_into(dst, x, amount2(amt.words()), signed);
 }
 
 /// 2 値の `dst = x << n`。
 ///
 /// # Panics
 /// `dst` と `x` の幅が違う場合。
-pub fn shl_const2(mut dst: BitMut<'_>, x: BitRef<'_>, n: u64) {
+pub fn shl_const2(dst: BitMut<'_>, x: BitRef<'_>, n: u64) {
     check_same_width("shl_const2", dst.width(), x.width());
-    dst.copy_from(x);
-    shl2_in_place(dst, n);
+    shl2_into(dst, x, n);
 }
 
 /// 2 値の `dst = x >> n`。
 ///
 /// # Panics
 /// `dst` と `x` の幅が違う場合。
-pub fn shr_const2(mut dst: BitMut<'_>, x: BitRef<'_>, n: u64) {
+pub fn shr_const2(dst: BitMut<'_>, x: BitRef<'_>, n: u64) {
     check_same_width("shr_const2", dst.width(), x.width());
-    dst.copy_from(x);
-    shr2_in_place(dst, n, false);
+    shr2_into(dst, x, n, false);
 }
 
 /// 2 値の `dst = x >>> n`。
 ///
 /// # Panics
 /// `dst` と `x` の幅が違う場合。
-pub fn ashr_const2(mut dst: BitMut<'_>, x: BitRef<'_>, n: u64, signed: bool) {
+pub fn ashr_const2(dst: BitMut<'_>, x: BitRef<'_>, n: u64, signed: bool) {
     check_same_width("ashr_const2", dst.width(), x.width());
-    dst.copy_from(x);
-    shr2_in_place(dst, n, signed);
+    shr2_into(dst, x, n, signed);
 }
 
 /// 2 値の `x <<= amt`。
@@ -474,10 +377,16 @@ pub fn ashr_const_assign2(x: BitMut<'_>, n: u64, signed: bool) {
 // 層 2: 混在 (2 値データ × 4 値シフト量 → 4 値結果、plan.md §3.5.1)
 // ===========================================================================
 
-/// 2 値のデータを 4 値の `dst` に写す (bval = 0)。
-fn load_bits(dst: &mut LogicMut<'_>, x: BitRef<'_>) {
+/// 2 値の `x` をずらして 4 値の `dst` に書く (bval = 0)。`shr` が偽なら左に、真なら右に `n` ビット
+/// ずらし、右シフトで空いた上位ビットは `fill` で埋める。1 パスで書く。
+fn shift_bits_into(dst: &mut LogicMut<'_>, x: BitRef<'_>, n: u64, shr: bool, fill: bool) {
+    let w = dst.width();
     let (a, b) = dst.planes_mut();
-    a.copy_from_slice(x.words());
+    if shr {
+        shr_plane(a, x.words(), w, n, fill);
+    } else {
+        shl_plane(a, x.words(), w, n);
+    }
     b.fill(0);
 }
 
@@ -491,9 +400,7 @@ pub fn shl_bits(mut dst: LogicMut<'_>, x: BitRef<'_>, amt: LogicRef<'_>) {
     match amount(amt) {
         None => dst.fill(Logic::X),
         Some(n) => {
-            load_bits(&mut dst, x);
-            let w = dst.width();
-            shl_plane(dst.planes_mut().0, w, n);
+            shift_bits_into(&mut dst, x, n, false, false);
         }
     }
 }
@@ -507,9 +414,7 @@ pub fn shr_bits(mut dst: LogicMut<'_>, x: BitRef<'_>, amt: LogicRef<'_>) {
     match amount(amt) {
         None => dst.fill(Logic::X),
         Some(n) => {
-            load_bits(&mut dst, x);
-            let w = dst.width();
-            shr_plane(dst.planes_mut().0, w, n, false);
+            shift_bits_into(&mut dst, x, n, true, false);
         }
     }
 }
@@ -523,14 +428,8 @@ pub fn ashr_bits(mut dst: LogicMut<'_>, x: BitRef<'_>, amt: LogicRef<'_>, signed
     match amount(amt) {
         None => dst.fill(Logic::X),
         Some(n) => {
-            load_bits(&mut dst, x);
-            let w = dst.width();
-            if w == 0 {
-                return;
-            }
-            let a = dst.planes_mut().0;
-            let f = signed && msb(a, w);
-            shr_plane(a, w, n, f);
+            let f = signed && sign_bit(x.words(), x.width());
+            shift_bits_into(&mut dst, x, n, true, f);
         }
     }
 }
@@ -801,25 +700,33 @@ mod tests {
         LogicVec::from_bits_str(s).unwrap()
     }
 
+    /// 1 パスの `dst = x << n` / `>> n` / `>>> n` が、in-place 版 (`_assign`) と一致する
+    /// (§11.4.10)。出力先の上位ビット (幅より上) を汚しておき、正規化されることも見る (plan.md §3.2)。
     #[test]
-    fn bit_helpers() {
-        let src = [0xF0F0_F0F0_F0F0_F0F0u64, 0x0123_4567_89AB_CDEF];
-        assert_eq!(read_bits(&src, 4, 8), 0x0F);
-        assert_eq!(read_bits(&src, 60, 8), 0xFF);
-        assert_eq!(read_bits(&src, 120, 64), 0x01);
-        assert_eq!(read_bits(&src, 200, 10), 0);
-        let mut dst = [0u64; 3];
-        copy_bits(&mut dst, 3, &src, 0, 128);
-        assert_eq!(read_bits(&dst, 3, 64), src[0]);
-        assert_eq!(read_bits(&dst, 67, 64), src[1]);
-        assert_eq!(dst[0] & 7, 0);
-        let mut f = [0u64; 3];
-        fill_bits(&mut f, 60, 130, true);
-        assert_eq!(f, [0xF << 60, !0, 0b11]);
-        fill_bits(&mut f, 62, 64, false);
-        assert_eq!(f[0], 0b11 << 60);
-        fill_bits(&mut f, 0, 192, true);
-        assert_eq!(f, [!0; 3]);
+    fn one_pass_matches_in_place() {
+        for w in [1u32, 2, 63, 64, 65, 127, 128, 129, 200] {
+            let mut x = LogicVec::zero(w);
+            for i in 0..w {
+                x.set_bit(i, Logic::ALL[((i * 7 + w) % 4) as usize]);
+            }
+            x.set_bit(w - 1, Logic::Z);
+            for n in [0u64, 1, 5, 63, 64, 65, (w - 1) as u64, w as u64, 1000] {
+                let nw = crate::words_for(w);
+                let mut a = vec![!0u64; nw];
+                let mut b = vec![!0u64; nw];
+                shl_const(LogicMut::new(w, &mut a, &mut b), x.as_ref(), n);
+                let got = LogicVec::from_ref(LogicRef::new(w, &a, &b));
+                assert!(LogicRef::new(w, &a, &b).is_normalized(), "shl w={w} n={n}");
+                assert_eq!(got, x.shl_const(n), "shl w={w} n={n}");
+                for signed in [false, true] {
+                    let (mut a, mut b) = (vec![!0u64; nw], vec![!0u64; nw]);
+                    ashr_const(LogicMut::new(w, &mut a, &mut b), x.as_ref(), n, signed);
+                    assert!(LogicRef::new(w, &a, &b).is_normalized(), "ashr w={w} n={n}");
+                    let got = LogicVec::from_ref(LogicRef::new(w, &a, &b));
+                    assert_eq!(got, x.ashr_const(n, signed), "ashr w={w} n={n} s={signed}");
+                }
+            }
+        }
     }
 
     /// §11.4.10 の例: `4'b1001 << 1` = `4'b0010`、`>>>` は符号ビットで埋める。

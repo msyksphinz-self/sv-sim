@@ -18,7 +18,7 @@ use svsim_logic_ref as r;
 use svsim_logic_ref::{RefIndex, RefVec};
 
 // ===========================================================================
-// ローカルの補助 (tests/common は読むだけ、plan.md §3.7)
+// ローカルの補助 (共通のものは tests/common にある)
 // ===========================================================================
 
 fn ref_index(i: Index) -> RefIndex {
@@ -26,11 +26,6 @@ fn ref_index(i: Index) -> RefIndex {
         Index::Unknown => RefIndex::Unknown,
         Index::Value(v) => RefIndex::Value(v),
     }
-}
-
-/// 2 値の期待値: 参照モデルの結果 → `to_two_state` (CR-5)。
-fn two(x: &RefVec) -> RefVec {
-    r::to_two_state(x)
 }
 
 /// 4 値のシフト量を `u64` に読む (既知のときだけ)。64 ビットを超えれば `u64::MAX`。
@@ -43,12 +38,6 @@ fn amount_u64(amt: &LogicVec) -> Option<u64> {
 
 fn amount2_u64(amt: &BitVec) -> u64 {
     amt.to_u64().unwrap_or(u64::MAX)
-}
-
-/// 入力が変わっていないこと (CR-7)。
-fn unchanged(before: &LogicVec, after: &LogicVec, ctx: &str) -> Result<(), TestCaseError> {
-    prop_assert!(before == after, "{}: input modified", ctx);
-    Ok(())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -162,7 +151,7 @@ fn check_shift(op: ShiftOp, x: &LogicVec, amt: &LogicVec) -> Result<(), TestCase
     // 2 値版 (X/Z を含まない入力、CR-5)
     let x2 = x.to_bit_vec();
     let amt2 = amt.to_bit_vec();
-    let want2 = two(&ref_shift(op, &bits_to_ref(&x2), &bits_to_ref(&amt2)));
+    let want2 = ref_two_state(&ref_shift(op, &bits_to_ref(&x2), &bits_to_ref(&amt2)));
     let got = match op {
         ShiftOp::Shl => x2.shl(&amt2),
         ShiftOp::Shr => x2.shr(&amt2),
@@ -264,8 +253,8 @@ fn check_shift(op: ShiftOp, x: &LogicVec, amt: &LogicVec) -> Result<(), TestCase
         check_eq_ref_l64(got, w, &want_m, &format!("{ctx} mixed L1"))?;
     }
 
-    unchanged(&x0, x, ctx)?;
-    unchanged(&amt0, amt, ctx)?;
+    check_unchanged(&x0, x, ctx)?;
+    check_unchanged(&amt0, amt, ctx)?;
     Ok(())
 }
 
@@ -287,7 +276,7 @@ fn check_resize(x: &LogicVec, to: u32, signed: bool) -> Result<(), TestCaseError
     }
     // 2 値
     let x2 = x.to_bit_vec();
-    let want2 = two(&r::resize(to as usize, &bits_to_ref(&x2), signed));
+    let want2 = ref_two_state(&r::resize(to as usize, &bits_to_ref(&x2), signed));
     check_eq_ref2(
         x2.resize(to, signed).as_ref(),
         &want2,
@@ -303,7 +292,7 @@ fn check_resize(x: &LogicVec, to: u32, signed: bool) -> Result<(), TestCaseError
         prop_assert_eq!(gv.to_u64(), Some(got), "{} 2-state L1 not normalized", ctx);
         check_eq_ref2(gv.as_ref(), &want2, &format!("{ctx} 2-state L1"))?;
     }
-    unchanged(&x0, x, ctx)
+    check_unchanged(&x0, x, ctx)
 }
 
 /// 4 値 ⇔ 2 値の変換 (TC31, TC35)。
@@ -356,7 +345,7 @@ fn check_concat(parts: &[LogicVec]) -> Result<(), TestCaseError> {
     check_eq_ref(d.as_ref(), &want, &format!("{ctx} L2"))?;
     // 2 値
     let bits: Vec<BitVec> = parts.iter().map(|p| p.to_bit_vec()).collect();
-    let want2 = two(&r::concat(
+    let want2 = ref_two_state(&r::concat(
         &bits.iter().map(bits_to_ref).collect::<Vec<_>>(),
     ));
     let br: Vec<&BitVec> = bits.iter().collect();
@@ -383,7 +372,7 @@ fn check_replicate(x: &LogicVec, n: u32) -> Result<(), TestCaseError> {
     concat::replicate(d.as_mut(), SplitLogic::from_vec(x).as_ref(), n);
     check_eq_ref(d.as_ref(), &want, &format!("{ctx} L2"))?;
     let b = x.to_bit_vec();
-    let want2 = two(&r::replicate(&bits_to_ref(&b), n));
+    let want2 = ref_two_state(&r::replicate(&bits_to_ref(&b), n));
     check_eq_ref2(
         b.replicate(n).as_ref(),
         &want2,
@@ -461,7 +450,7 @@ fn check_select(src: &LogicVec, sel: &LogicVec, idx: Index) -> Result<(), TestCa
     // 2 値 (範囲外・Unknown は 0、§3.5.1 規則 5)
     let s2 = src.to_bit_vec();
     let l2 = sel.to_bit_vec();
-    let want2 = two(&r::get_slice(lw as usize, &bits_to_ref(&s2), ri));
+    let want2 = ref_two_state(&r::get_slice(lw as usize, &bits_to_ref(&s2), ri));
     check_eq_ref2(
         s2.get_slice(lw, idx).as_ref(),
         &want2,
@@ -476,14 +465,14 @@ fn check_select(src: &LogicVec, sel: &LogicVec, idx: Index) -> Result<(), TestCa
         prop_assert_eq!(gv.to_u64(), Some(got), "{} get2 L1 not normalized", ctx);
         check_eq_ref2(gv.as_ref(), &want2, &format!("{ctx} get2 L1"))?;
     }
-    let want_b2 = two(&r::get_slice(1, &bits_to_ref(&s2), ri));
+    let want_b2 = ref_two_state(&r::get_slice(1, &bits_to_ref(&s2), ri));
     prop_assert_eq!(
         s2.get_bit(idx),
         want_b2.to_bits_string() == "1",
         "{} get_bit2",
         ctx
     );
-    let want_set2 = two(&r::set_slice(&bits_to_ref(&s2), ri, &bits_to_ref(&l2)));
+    let want_set2 = ref_two_state(&r::set_slice(&bits_to_ref(&s2), ri, &bits_to_ref(&l2)));
     let mut v2 = s2.clone();
     v2.set_slice(idx, &l2);
     check_eq_ref2(v2.as_ref(), &want_set2, &format!("{ctx} set2 L3"))?;
@@ -497,7 +486,7 @@ fn check_select(src: &LogicVec, sel: &LogicVec, idx: Index) -> Result<(), TestCa
         check_eq_ref2(gv.as_ref(), &want_set2, &format!("{ctx} set2 L1"))?;
     }
     let b0 = l2.bit(0);
-    let want_sb2 = two(&r::set_slice(
+    let want_sb2 = ref_two_state(&r::set_slice(
         &bits_to_ref(&s2),
         ri,
         &bits_to_ref(&BitVec::from(b0)),
@@ -506,7 +495,7 @@ fn check_select(src: &LogicVec, sel: &LogicVec, idx: Index) -> Result<(), TestCa
     v2.set_bit_at(idx, b0);
     check_eq_ref2(v2.as_ref(), &want_sb2, &format!("{ctx} set_bit2 L3"))?;
 
-    unchanged(&src0, src, ctx)
+    check_unchanged(&src0, src, ctx)
 }
 
 /// インデックスの解釈 (TC33, TC35)。
@@ -742,28 +731,8 @@ proptest! {
 // 網羅テスト (plan.md §5.4: 幅 1〜4 の全値 × シフト量 0..=w+1 と X)
 // ===========================================================================
 
-fn all_values(w: u32) -> Vec<LogicVec> {
-    let n = 4usize.pow(w);
-    (0..n)
-        .map(|mut k| {
-            let mut v = LogicVec::zero(w);
-            for i in 0..w {
-                v.set_bit(i, Logic::ALL[k % 4]);
-                k /= 4;
-            }
-            v
-        })
-        .collect()
-}
-
 fn lv(s: &str) -> LogicVec {
     LogicVec::from_bits_str(s).unwrap()
-}
-
-fn run(r: Result<(), TestCaseError>) {
-    if let Err(e) = r {
-        panic!("{e}");
-    }
 }
 
 /// TC30 網羅: 幅 1〜4 の全 4 値 × シフト量 `0..=w+1` と X/Z を含むシフト量。
@@ -774,10 +743,10 @@ fn exhaustive_shift_w1_4() {
             .map(|n| LogicVec::from_u64(3, n))
             .collect();
         amts.extend(["x0", "z11", "x", "1z", "xxx"].map(lv));
-        for x in all_values(w) {
+        for x in all_logic(w) {
             for amt in &amts {
                 for op in SHIFT_OPS {
-                    run(check_shift(op, &x, amt));
+                    run_case(check_shift(op, &x, amt));
                 }
             }
         }
@@ -789,33 +758,33 @@ fn exhaustive_shift_w1_4() {
 #[test]
 fn exhaustive_struct_w1_3() {
     for w in 1..=3u32 {
-        let vals = all_values(w);
+        let vals = all_logic(w);
         for x in &vals {
             for to in 1..=5 {
                 for s in [false, true] {
-                    run(check_resize(x, to, s));
+                    run_case(check_resize(x, to, s));
                 }
             }
-            run(check_two_state(x));
-            run(check_clog2(x));
+            run_case(check_two_state(x));
+            run_case(check_clog2(x));
             for s in [false, true] {
-                run(check_index_value(x, s));
+                run_case(check_index_value(x, s));
             }
             for sel in [lv("1"), lv("x0"), lv("z1x")] {
                 for off in -4..=6 {
-                    run(check_select(x, &sel, Index::Value(off)));
+                    run_case(check_select(x, &sel, Index::Value(off)));
                 }
-                run(check_select(x, &sel, Index::Unknown));
+                run_case(check_select(x, &sel, Index::Unknown));
             }
         }
         // 連結: 幅 w の値と 2 ビットの値の全組 (w <= 2)
         if w <= 2 {
             for x in &vals {
-                for y in all_values(2) {
-                    run(check_concat(&[x.clone(), LogicVec::zero(0), y]));
+                for y in all_logic(2) {
+                    run_case(check_concat(&[x.clone(), LogicVec::zero(0), y]));
                 }
                 for n in 0..=3 {
-                    run(check_replicate(x, n));
+                    run_case(check_replicate(x, n));
                 }
             }
         }
@@ -886,7 +855,7 @@ fn tc52_width_boundaries() {
         for x in &pats {
             for amt in &amts {
                 for op in SHIFT_OPS {
-                    run(check_shift(op, x, amt));
+                    run_case(check_shift(op, x, amt));
                 }
             }
             for to in [1, w - 1, w, w + 1, 64, 65, 129] {
@@ -894,13 +863,13 @@ fn tc52_width_boundaries() {
                     continue;
                 }
                 for s in [false, true] {
-                    run(check_resize(x, to, s));
+                    run_case(check_resize(x, to, s));
                 }
             }
-            run(check_two_state(x));
-            run(check_clog2(x));
-            run(check_concat(&[x.clone(), lv("1x"), x.clone()]));
-            run(check_replicate(x, 2));
+            run_case(check_two_state(x));
+            run_case(check_clog2(x));
+            run_case(check_concat(&[x.clone(), lv("1x"), x.clone()]));
+            run_case(check_replicate(x, 2));
             let wi = w as i64;
             for (lw, off) in [
                 (1u32, 0i64),
@@ -916,13 +885,13 @@ fn tc52_width_boundaries() {
                 (3, i64::MIN),
             ] {
                 let sel = LogicVec::filled(lw, Logic::L1);
-                run(check_select(x, &sel, Index::Value(off)));
+                run_case(check_select(x, &sel, Index::Value(off)));
             }
-            run(check_select(x, &lv("10"), Index::Unknown));
+            run_case(check_select(x, &lv("10"), Index::Unknown));
         }
         for p in pats.iter().take(3) {
             for s in [false, true] {
-                run(check_index_value(p, s));
+                run_case(check_index_value(p, s));
             }
         }
     }

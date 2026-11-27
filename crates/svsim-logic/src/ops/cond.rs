@@ -11,7 +11,7 @@
 //! 混在カーネル [`cond_merge_bits`] (plan.md §3.5.1) は 2 値の t, f から 4 値の結果を直接作る。
 //! 結果は 4 値のまま返し、2 値の変数に代入するときに x が 0 になる (§6.11.2)。
 
-use crate::ops::bitwise::check_same_width;
+use crate::ops::check_same_width;
 use crate::scalar::{L64, mask};
 use crate::vec::{BitVec, LogicVec};
 use crate::view::{BitRef, LogicMut, LogicRef};

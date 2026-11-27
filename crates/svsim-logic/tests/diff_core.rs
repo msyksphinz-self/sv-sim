@@ -676,44 +676,77 @@ fn strategy_distribution() {
 // ===========================================================================
 
 #[test]
-#[should_panic(expected = "planar length must be 2*words_for(65)")]
+#[should_panic(expected = "LogicRef::from_planar: planar length must be 2*words_for(65) (got 3)")]
 fn from_planar_rejects_len_3() {
     let w = [0u64; 3];
     let _ = LogicRef::from_planar(65, &w);
 }
 
 #[test]
-#[should_panic(expected = "planar length must be 2*words_for(65)")]
+#[should_panic(expected = "LogicMut::from_planar: planar length must be 2*words_for(65) (got 5)")]
 fn from_planar_rejects_len_5() {
     let mut w = [0u64; 5];
     let _ = LogicMut::from_planar(65, &mut w);
 }
 
 #[test]
-#[should_panic(expected = "bit index 129 out of range for width 129")]
+#[should_panic(expected = "LogicVec::bit: bit index 129 out of range for width 129")]
 fn bit_rejects_out_of_range() {
     let _ = LogicVec::zero(129).bit(129);
 }
 
 #[test]
-#[should_panic(expected = "bit index 129 out of range for width 129")]
+#[should_panic(expected = "LogicVec::set_bit: bit index 129 out of range for width 129")]
 fn set_bit_rejects_out_of_range() {
     LogicVec::zero(129).set_bit(129, Logic::L1);
 }
 
 #[test]
-#[should_panic(expected = "bit index 129 out of range for width 129")]
+#[should_panic(expected = "BitMut::set_bit: bit index 129 out of range for width 129")]
 fn bit2_rejects_out_of_range() {
     let mut a = [0u64; 3];
     BitMut::new(129, &mut a).set_bit(129, true);
 }
 
 #[test]
-#[should_panic(expected = "copy_from: width mismatch")]
+#[should_panic(expected = "LogicMut::copy_from: width mismatch (dst 9, src 8)")]
 fn copy_from_rejects_width_mismatch() {
     let src = LogicVec::zero(8);
     let mut dst = LogicVec::zero(9);
     dst.as_mut().copy_from(src.as_ref());
+}
+
+#[test]
+#[should_panic(expected = "BitMut::copy_from: width mismatch (dst 9, src 8)")]
+fn copy_from2_rejects_width_mismatch() {
+    let src = BitVec::zero(8);
+    let mut dst = BitVec::zero(9);
+    dst.as_mut().copy_from(src.as_ref());
+}
+
+#[test]
+#[should_panic(expected = "BitRef::new: plane length must be words_for(65) (got 1)")]
+fn bit_ref_new_rejects_bad_length() {
+    let _ = BitRef::new(65, &[0u64]);
+}
+
+#[test]
+#[should_panic(expected = "LogicMut::new: plane length must be words_for(65) (got 3)")]
+fn logic_mut_new_rejects_bad_length() {
+    let (mut a, mut b) = ([0u64; 2], [0u64; 3]);
+    let _ = LogicMut::new(65, &mut a, &mut b);
+}
+
+#[test]
+#[should_panic(expected = "BitVec::bit: bit index 8 out of range for width 8")]
+fn bit_vec_bit_rejects_out_of_range() {
+    let _ = BitVec::zero(8).bit(8);
+}
+
+#[test]
+#[should_panic(expected = "LogicVec::zero: width")]
+fn logic_vec_zero_rejects_too_wide() {
+    let _ = LogicVec::zero(svsim_logic::MAX_WIDTH + 1);
 }
 
 #[test]

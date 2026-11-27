@@ -332,9 +332,9 @@ fn parse_pow2(
             && nbits < width
         {
             if u.aval() {
-                set_ones(pa, nbits, width);
+                words::fill_bits(pa, nbits as usize, width as usize, true);
             }
-            set_ones(pb, nbits, width);
+            words::fill_bits(pb, nbits as usize, width as usize, true);
         }
     }
     Ok(Literal {
@@ -362,19 +362,6 @@ fn put_bits(plane: &mut [u64], width: u64, off: u64, v: u64, len: u32) -> bool {
         plane[w + 1] |= low >> (64 - s);
     }
     (v >> keep) != 0
-}
-
-/// `plane` のビット `lo..hi` を 1 にする。
-fn set_ones(plane: &mut [u64], lo: u64, hi: u64) {
-    let mut i = lo;
-    while i < hi {
-        let w = (i / 64) as usize;
-        let s = (i % 64) as u32;
-        let n = (hi - i).min(u64::from(64 - s)) as u32;
-        let m = if n == 64 { !0 } else { ((1u64 << n) - 1) << s };
-        plane[w] |= m;
-        i += u64::from(n);
-    }
 }
 
 // ---------------------------------------------------------------------------

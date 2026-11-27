@@ -1,25 +1,30 @@
-//! 2 値のワード列プリミティブ (add/sub/neg/shift/mul_small_add/divrem_small/cmp/is_zero、
-//! 算術 (M0-T5) 用の mul_lo/divrem_in_place)。crate 内専用。
+//! ワード列の crate 内専用の補助。
+//!
+//! 1. 2 値のワード列プリミティブ (add/sub/neg/shift/mul_small_add/divrem_small/cmp/is_zero、
+//!    算術 (M0-T5) 用の mul_lo/divrem_in_place)。
+//! 2. プレーン (1 枚のワード列) のビット単位の読み書き ([`bit`]、[`set_bit`]、[`read_bits`]、
+//!    [`write_bits`]、[`copy_bits`]、[`fill_bits`])。連結・複製・選択・拡張・シフト・表示が共有する
+//!    (M0-T14 で `ops/shift.rs` と各 ops ファイルの重複から統合した)。
 //!
 //! 値は `u64` のリトルエンディアンのワード列 (ワード 0 が最下位、plan.md §3.2) で、幅の情報を持たない。
 //! 2 値カーネルの aval プレーンや、4 値の算術で「未知が無い」と分かったあとの aval プレーンに使う
 //! (plan.md §3.3: 4 値の算術は X 検査のあと 2 値カーネルに委ねる)。
 //!
 //! 約束:
-//! - 2 つ以上のワード列を受ける関数は、長さが等しいことを要求する (`assert_eq!`。crate 内の誤用の検出)。
+//! - 2 つ以上のワード列を受ける算術の関数は、長さが等しいことを要求する (`assert_eq!`。crate 内の誤用の
+//!   検出)。
 //! - 結果はワード列の長さで切り詰める (2^(64·len) の剰余)。幅 `w` での正規化 (最上位ワードの
 //!   `w` ビット目以上を 0 にする) は呼び出し側が [`normalize_plane`](crate::layout::normalize_plane)
-//!   で行う。
+//!   で行う。ビット単位の補助も、指定した範囲の外のビットには触れない (正規化は呼び出し側)。
 //! - ヒープ確保をしない。作業領域が要るものは無い (作業領域は呼び出し側が [`Scratch`](crate::Scratch)
 //!   から切り出して渡す方針。`scratch.rs` のモジュールの説明を参照)。
 //!
 //! 共有先: M0-T5 (算術)、M0-T7 (10 進リテラル: [`mul_small_add`])、M0-T8 (10 進表示: [`divrem_small`]
 //! で 10^19 ずつ割る)。
 
-// T5/T7/T8 が使うまでは、crate 内から呼ばれない関数がある。使われ始めたら外してよい。
-#![allow(dead_code)]
-
 use core::cmp::Ordering;
+
+use crate::scalar::mask;
 
 /// `dst = x + y`。桁あふれ (最上位ワードからの繰り上がり) を返す。
 pub(crate) fn add(dst: &mut [u64], x: &[u64], y: &[u64]) -> bool {
@@ -426,6 +431,111 @@ pub(crate) fn divrem_in_place(un: &mut [u64], vn: &mut [u64], mut q: Option<&mut
     un[nv..].fill(0);
 }
 
+// ===========================================================================
+// プレーンのビット単位の読み書き
+// ===========================================================================
+
+/// プレーン `x` のビット `i`。`i` は `64 * x.len()` 未満であること。
+#[inline]
+pub(crate) fn bit(x: &[u64], i: u64) -> bool {
+    (x[(i / 64) as usize] >> (i % 64)) & 1 != 0
+}
+
+/// プレーン `x` のビット `i` を `v` にする。`i` は `64 * x.len()` 未満であること。
+#[inline]
+pub(crate) fn set_bit(x: &mut [u64], i: u64, v: bool) {
+    let w = &mut x[(i / 64) as usize];
+    let m = 1u64 << (i % 64);
+    if v {
+        *w |= m;
+    } else {
+        *w &= !m;
+    }
+}
+
+/// プレーン `src` のビット `off` から `n` ビット (`n <= 64`) を読む。`src` の外のビットは 0。
+#[inline]
+pub(crate) fn read_bits(src: &[u64], off: usize, n: usize) -> u64 {
+    debug_assert!(n <= 64);
+    if n == 0 {
+        return 0;
+    }
+    let wi = off / 64;
+    let b = off % 64;
+    let lo = src.get(wi).copied().unwrap_or(0) >> b;
+    let hi = if b != 0 {
+        src.get(wi + 1).copied().unwrap_or(0) << (64 - b)
+    } else {
+        0
+    };
+    (lo | hi) & mask(n as u32)
+}
+
+/// プレーン `dst` のビット `off` から `n` ビット (`n <= 64`) に `v` の下位 `n` ビットを書く。
+/// `off + n` は `dst` の長さ (ビット) 以下であること。
+#[inline]
+pub(crate) fn write_bits(dst: &mut [u64], off: usize, n: usize, v: u64) {
+    debug_assert!(n <= 64);
+    if n == 0 {
+        return;
+    }
+    let m = mask(n as u32);
+    let v = v & m;
+    let wi = off / 64;
+    let b = off % 64;
+    dst[wi] = (dst[wi] & !(m << b)) | (v << b);
+    if b + n > 64 {
+        let r = 64 - b;
+        dst[wi + 1] = (dst[wi + 1] & !(m >> r)) | (v >> r);
+    }
+}
+
+/// `src` のビット `[soff, soff + len)` を `dst` のビット `[doff, doff + len)` に写す。
+/// `dst` の範囲の外のビットは変えない。
+pub(crate) fn copy_bits(dst: &mut [u64], doff: usize, src: &[u64], soff: usize, len: usize) {
+    if doff.is_multiple_of(64) && soff.is_multiple_of(64) {
+        // ワード境界が揃っている場合はワード単位で写す。
+        let full = len / 64;
+        let (dw, sw) = (doff / 64, soff / 64);
+        dst[dw..dw + full].copy_from_slice(&src[sw..sw + full]);
+        let rest = len % 64;
+        if rest != 0 {
+            let v = read_bits(src, soff + full * 64, rest);
+            write_bits(dst, doff + full * 64, rest, v);
+        }
+        return;
+    }
+    let mut k = 0;
+    while k < len {
+        let n = (len - k).min(64);
+        let v = read_bits(src, soff + k, n);
+        write_bits(dst, doff + k, n, v);
+        k += n;
+    }
+}
+
+/// `dst` のビット `[lo, hi)` を `v` で埋める。範囲の外のビットは変えない。
+pub(crate) fn fill_bits(dst: &mut [u64], lo: usize, hi: usize, v: bool) {
+    if lo >= hi {
+        return;
+    }
+    let fill = if v { !0u64 } else { 0 };
+    let (lw, lb) = (lo / 64, lo % 64);
+    let (hw, hb) = (hi / 64, hi % 64);
+    if lw == hw {
+        let m = mask((hb - lb) as u32) << lb;
+        dst[lw] = (dst[lw] & !m) | (fill & m);
+        return;
+    }
+    let m = !0u64 << lb;
+    dst[lw] = (dst[lw] & !m) | (fill & m);
+    dst[lw + 1..hw].fill(fill);
+    if hb != 0 {
+        let m = mask(hb as u32);
+        dst[hw] = (dst[hw] & !m) | (fill & m);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -672,6 +782,39 @@ mod tests {
                 (a as i128).cmp(&(b as i128))
             );
         }
+    }
+
+    #[test]
+    fn bit_helpers() {
+        let src = [0xF0F0_F0F0_F0F0_F0F0u64, 0x0123_4567_89AB_CDEF];
+        assert_eq!(read_bits(&src, 4, 8), 0x0F);
+        assert_eq!(read_bits(&src, 60, 8), 0xFF);
+        assert_eq!(read_bits(&src, 120, 64), 0x01);
+        assert_eq!(read_bits(&src, 200, 10), 0);
+        assert_eq!(read_bits(&src, 64, 64), src[1]);
+        let mut dst = [0u64; 3];
+        copy_bits(&mut dst, 3, &src, 0, 128);
+        assert_eq!(read_bits(&dst, 3, 64), src[0]);
+        assert_eq!(read_bits(&dst, 67, 64), src[1]);
+        assert_eq!(dst[0] & 7, 0);
+        // 範囲の外 (ビット 131 以上) は変えない。
+        let mut dst = [!0u64; 3];
+        copy_bits(&mut dst, 64, &src, 0, 67);
+        assert_eq!(dst, [!0, src[0], (src[1] & 0b111) | (!0 << 3)]);
+        let mut f = [0u64; 3];
+        fill_bits(&mut f, 60, 130, true);
+        assert_eq!(f, [0xF << 60, !0, 0b11]);
+        fill_bits(&mut f, 62, 64, false);
+        assert_eq!(f[0], 0b11 << 60);
+        fill_bits(&mut f, 0, 192, true);
+        assert_eq!(f, [!0; 3]);
+        let mut w = [0u64; 2];
+        write_bits(&mut w, 60, 8, 0xAB);
+        assert_eq!(w, [0xB << 60, 0xA]);
+        assert!(!bit(&w, 64) && bit(&w, 65));
+        set_bit(&mut w, 127, true);
+        set_bit(&mut w, 65, false);
+        assert_eq!(w, [0xB << 60, 0x8 | 1 << 63]);
     }
 
     #[test]

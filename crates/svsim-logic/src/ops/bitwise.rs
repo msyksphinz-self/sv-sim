@@ -8,31 +8,12 @@
 //! |---|---|---|
 //! | 層 1 (幅 ≤ 64) | [`not_l64`] [`and_l64`] [`or_l64`] [`xor_l64`] [`xnor_l64`] | [`not2_l64`] [`and2_l64`] [`or2_l64`] [`xor2_l64`] [`xnor2_l64`] |
 //! | 層 2 (任意幅) | [`not`] [`and`] [`or`] [`xor`] [`xnor`] と `_assign` 版 | [`not2`] [`and2`] [`or2`] [`xor2`] [`xnor2`] と `_assign` 版 |
-//! | 層 3 | `LogicVec::{not, and, or, xor, xnor}` と `_assign` 版 | `BitVec::{not, and, or, xor, xnor}` と `_assign` 版 |
+//! | 層 3 | `!&x` (`std::ops::Not`)、`LogicVec::{and, or, xor, xnor}` と `_assign` 版 (`not_assign` も) | `!&x`、`BitVec::{and, or, xor, xnor}` と `_assign` 版 (`not_assign` も) |
 
+use crate::ops::{check_nonzero_width, check_same_width};
 use crate::scalar::{L64, mask};
 use crate::vec::{BitVec, LogicVec};
 use crate::view::{BitMut, BitRef, LogicMut, LogicRef};
-
-// ===========================================================================
-// 幅の検査 (ops 内で共有する)
-// ===========================================================================
-
-/// 文脈決定のオペランドの幅が揃っていることを検査する (plan.md §3.3 規約 1、決定 Q-1)。
-/// release でも残す。幅 0 は `debug_assert!` で弾く (plan.md §3.2)。
-#[inline]
-#[track_caller]
-pub(crate) fn check_same_width(op: &str, a: u32, b: u32) {
-    assert!(a == b, "{op}: width mismatch ({a} vs {b})");
-    debug_assert!(a != 0, "{op}: width 0 is only allowed in concatenation");
-}
-
-/// 1 オペランドの演算の幅 0 の検査 (`debug_assert!`、plan.md §3.2)。
-#[inline]
-#[track_caller]
-pub(crate) fn check_nonzero_width(op: &str, w: u32) {
-    debug_assert!(w != 0, "{op}: width 0 is only allowed in concatenation");
-}
 
 // ===========================================================================
 // ワード単位の式 (層 1 と層 2 で共有する。plan.md §3.4)
@@ -345,15 +326,45 @@ macro_rules! vec_binop {
     };
 }
 
-impl LogicVec {
-    /// `~self` (§11.4.8)。
-    #[allow(clippy::should_implement_trait)] // 層 3 の名前は層 2 のカーネルと揃える (plan.md §3.3)
-    pub fn not(&self) -> LogicVec {
+/// `~x` (§11.4.8)。`!` 演算子で書く (`!&x` は `x` を残す)。
+impl core::ops::Not for &LogicVec {
+    type Output = LogicVec;
+    fn not(self) -> LogicVec {
         let mut r = LogicVec::zero(self.width());
         not(r.as_mut(), self.as_ref());
         r
     }
+}
 
+/// `~x` (§11.4.8)。in-place で反転する。
+impl core::ops::Not for LogicVec {
+    type Output = LogicVec;
+    fn not(mut self) -> LogicVec {
+        not_assign(self.as_mut());
+        self
+    }
+}
+
+/// `~x` (2 値、§11.4.8)。
+impl core::ops::Not for &BitVec {
+    type Output = BitVec;
+    fn not(self) -> BitVec {
+        let mut r = BitVec::zero(self.width());
+        not2(r.as_mut(), self.as_ref());
+        r
+    }
+}
+
+/// `~x` (2 値、§11.4.8)。in-place で反転する。
+impl core::ops::Not for BitVec {
+    type Output = BitVec;
+    fn not(mut self) -> BitVec {
+        not_assign2(self.as_mut());
+        self
+    }
+}
+
+impl LogicVec {
     /// `self = ~self` (§11.4.8)。
     pub fn not_assign(&mut self) {
         not_assign(self.as_mut());
@@ -366,14 +377,6 @@ impl LogicVec {
 }
 
 impl BitVec {
-    /// `~self` (2 値、§11.4.8)。
-    #[allow(clippy::should_implement_trait)] // 層 3 の名前は層 2 のカーネルと揃える (plan.md §3.3)
-    pub fn not(&self) -> BitVec {
-        let mut r = BitVec::zero(self.width());
-        not2(r.as_mut(), self.as_ref());
-        r
-    }
-
     /// `self = ~self` (2 値、§11.4.8)。
     pub fn not_assign(&mut self) {
         not_assign2(self.as_mut());
@@ -424,7 +427,7 @@ mod tests {
     fn slice_matches_scalar_and_normalizes() {
         let x = LogicVec::from_bits_str("01x1z0").unwrap();
         let y = LogicVec::from_bits_str("1z0x10").unwrap();
-        let n = x.not();
+        let n = !&x;
         assert_eq!(n.to_bits_string(), "10x0x1");
         assert!(n.as_ref().is_normalized());
         assert_eq!(x.and(&y).to_bits_string(), "0x0xx0");
@@ -443,7 +446,8 @@ mod tests {
         assert_eq!(x.or(&y).to_u64(), Some(0xfc));
         assert_eq!(x.xor(&y).to_u64(), Some(0xcc));
         assert_eq!(x.xnor(&y).to_u64(), Some(0x33));
-        assert_eq!(x.not().to_u64(), Some(0x0f));
+        assert_eq!((!&x).to_u64(), Some(0x0f));
+        assert_eq!((!x.clone()).to_u64(), Some(0x0f));
         assert_eq!(xnor2_l64(0xf0, 0x3c, 8), 0x33);
         assert_eq!(not2_l64(0, 65), u64::MAX);
     }

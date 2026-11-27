@@ -10,36 +10,39 @@ use std::fmt;
 
 use crate::layout::{MAX_WIDTH, is_plane_normalized, normalize_plane, words_for};
 use crate::logic::Logic;
+use crate::words;
 
+/// スライスの長さの検査。panic のメッセージは `"<f>: ..."` の形 (test-plan TC57)。
 #[inline]
-fn check_len(width: u32, len: usize) {
-    debug_assert!(width <= MAX_WIDTH, "width {width} exceeds MAX_WIDTH");
+#[track_caller]
+fn check_len(f: &str, width: u32, len: usize) {
+    debug_assert!(width <= MAX_WIDTH, "{f}: width {width} exceeds MAX_WIDTH");
     assert_eq!(
         len,
         words_for(width),
-        "plane length must be words_for({width})"
+        "{f}: plane length must be words_for({width}) (got {len})"
     );
 }
 
+/// ビット位置の検査。panic のメッセージは `"<f>: ..."` の形 (test-plan TC57)。
 #[inline]
-fn check_index(width: u32, i: u32) {
-    assert!(i < width, "bit index {i} out of range for width {width}");
+#[track_caller]
+fn check_index(f: &str, width: u32, i: u32) {
+    assert!(
+        i < width,
+        "{f}: bit index {i} out of range for width {width}"
+    );
 }
 
+/// プレーン分離配置のワード列の長さの検査。
 #[inline]
-fn get_plane_bit(words: &[u64], i: u32) -> bool {
-    (words[(i / 64) as usize] >> (i % 64)) & 1 != 0
-}
-
-#[inline]
-fn set_plane_bit(words: &mut [u64], i: u32, v: bool) {
-    let w = &mut words[(i / 64) as usize];
-    let m = 1u64 << (i % 64);
-    if v {
-        *w |= m;
-    } else {
-        *w &= !m;
-    }
+#[track_caller]
+fn check_planar_len(f: &str, width: u32, len: usize) {
+    assert_eq!(
+        len,
+        2 * words_for(width),
+        "{f}: planar length must be 2*words_for({width}) (got {len})"
+    );
 }
 
 #[inline]
@@ -97,8 +100,8 @@ impl<'a> LogicRef<'a> {
     /// どちらかの長さが `words_for(width)` でない場合。
     #[inline]
     pub fn new(width: u32, a: &'a [u64], b: &'a [u64]) -> Self {
-        check_len(width, a.len());
-        check_len(width, b.len());
+        check_len("LogicRef::new", width, a.len());
+        check_len("LogicRef::new", width, b.len());
         LogicRef { width, a, b }
     }
 
@@ -109,11 +112,7 @@ impl<'a> LogicRef<'a> {
     #[inline]
     pub fn from_planar(width: u32, words: &'a [u64]) -> Self {
         let nw = words_for(width);
-        assert_eq!(
-            words.len(),
-            2 * nw,
-            "planar length must be 2*words_for({width})"
-        );
+        check_planar_len("LogicRef::from_planar", width, words.len());
         let (a, b) = words.split_at(nw);
         LogicRef { width, a, b }
     }
@@ -148,8 +147,11 @@ impl<'a> LogicRef<'a> {
     /// `i >= width` の場合。
     #[inline]
     pub fn bit(&self, i: u32) -> Logic {
-        check_index(self.width, i);
-        Logic::from_ab(get_plane_bit(self.a, i), get_plane_bit(self.b, i))
+        check_index("LogicRef::bit", self.width, i);
+        Logic::from_ab(
+            words::bit(self.a, u64::from(i)),
+            words::bit(self.b, u64::from(i)),
+        )
     }
 
     /// X または Z のビットがあれば真 (bval に 1 がある)。
@@ -206,8 +208,8 @@ impl<'a> LogicMut<'a> {
     /// どちらかの長さが `words_for(width)` でない場合。
     #[inline]
     pub fn new(width: u32, a: &'a mut [u64], b: &'a mut [u64]) -> Self {
-        check_len(width, a.len());
-        check_len(width, b.len());
+        check_len("LogicMut::new", width, a.len());
+        check_len("LogicMut::new", width, b.len());
         LogicMut { width, a, b }
     }
 
@@ -218,11 +220,7 @@ impl<'a> LogicMut<'a> {
     #[inline]
     pub fn from_planar(width: u32, words: &'a mut [u64]) -> Self {
         let nw = words_for(width);
-        assert_eq!(
-            words.len(),
-            2 * nw,
-            "planar length must be 2*words_for({width})"
-        );
+        check_planar_len("LogicMut::from_planar", width, words.len());
         let (a, b) = words.split_at_mut(nw);
         LogicMut { width, a, b }
     }
@@ -287,6 +285,7 @@ impl<'a> LogicMut<'a> {
     /// `i >= width` の場合。
     #[inline]
     pub fn bit(&self, i: u32) -> Logic {
+        check_index("LogicMut::bit", self.width, i);
         self.as_ref().bit(i)
     }
 
@@ -303,9 +302,9 @@ impl<'a> LogicMut<'a> {
     /// `i >= width` の場合。
     #[inline]
     pub fn set_bit(&mut self, i: u32, v: Logic) {
-        check_index(self.width, i);
-        set_plane_bit(self.a, i, v.aval());
-        set_plane_bit(self.b, i, v.bval());
+        check_index("LogicMut::set_bit", self.width, i);
+        words::set_bit(self.a, u64::from(i), v.aval());
+        words::set_bit(self.b, u64::from(i), v.bval());
     }
 
     /// `src` の内容を写す。
@@ -314,7 +313,11 @@ impl<'a> LogicMut<'a> {
     /// 幅が一致しない場合。
     #[inline]
     pub fn copy_from(&mut self, src: LogicRef<'_>) {
-        assert_eq!(self.width, src.width, "copy_from: width mismatch");
+        assert_eq!(
+            self.width, src.width,
+            "LogicMut::copy_from: width mismatch (dst {}, src {})",
+            self.width, src.width
+        );
         self.a.copy_from_slice(src.a);
         self.b.copy_from_slice(src.b);
     }
@@ -352,7 +355,7 @@ impl<'a> BitRef<'a> {
     /// `a.len() != words_for(width)` の場合。
     #[inline]
     pub fn new(width: u32, a: &'a [u64]) -> Self {
-        check_len(width, a.len());
+        check_len("BitRef::new", width, a.len());
         BitRef { width, a }
     }
 
@@ -380,8 +383,8 @@ impl<'a> BitRef<'a> {
     /// `i >= width` の場合。
     #[inline]
     pub fn bit(&self, i: u32) -> bool {
-        check_index(self.width, i);
-        get_plane_bit(self.a, i)
+        check_index("BitRef::bit", self.width, i);
+        words::bit(self.a, u64::from(i))
     }
 
     /// 正規化不変条件を満たすか。
@@ -430,7 +433,7 @@ impl<'a> BitMut<'a> {
     /// `a.len() != words_for(width)` の場合。
     #[inline]
     pub fn new(width: u32, a: &'a mut [u64]) -> Self {
-        check_len(width, a.len());
+        check_len("BitMut::new", width, a.len());
         BitMut { width, a }
     }
 
@@ -491,6 +494,7 @@ impl<'a> BitMut<'a> {
     /// `i >= width` の場合。
     #[inline]
     pub fn bit(&self, i: u32) -> bool {
+        check_index("BitMut::bit", self.width, i);
         self.as_ref().bit(i)
     }
 
@@ -506,8 +510,8 @@ impl<'a> BitMut<'a> {
     /// `i >= width` の場合。
     #[inline]
     pub fn set_bit(&mut self, i: u32, v: bool) {
-        check_index(self.width, i);
-        set_plane_bit(self.a, i, v);
+        check_index("BitMut::set_bit", self.width, i);
+        words::set_bit(self.a, u64::from(i), v);
     }
 
     /// `src` の内容を写す。
@@ -516,7 +520,11 @@ impl<'a> BitMut<'a> {
     /// 幅が一致しない場合。
     #[inline]
     pub fn copy_from(&mut self, src: BitRef<'_>) {
-        assert_eq!(self.width, src.width, "copy_from: width mismatch");
+        assert_eq!(
+            self.width, src.width,
+            "BitMut::copy_from: width mismatch (dst {}, src {})",
+            self.width, src.width
+        );
         self.a.copy_from_slice(src.a);
     }
 
@@ -572,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "plane length")]
+    #[should_panic(expected = "LogicRef::new: plane length must be words_for(64) (got 2)")]
     fn logic_ref_rejects_bad_length() {
         let a = [0u64; 2];
         let b = [0u64; 1];
@@ -580,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "out of range")]
+    #[should_panic(expected = "LogicRef::bit: bit index 8 out of range for width 8")]
     fn bit_index_out_of_range_panics() {
         let w = [0u64, 0];
         let _ = LogicRef::from_planar(8, &w).bit(8);
@@ -656,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "width mismatch")]
+    #[should_panic(expected = "LogicMut::copy_from: width mismatch (dst 8, src 7)")]
     fn copy_from_width_mismatch_panics() {
         let mut w1 = [0u64; 2];
         let w2 = [0u64; 2];
