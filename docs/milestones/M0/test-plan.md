@@ -1186,7 +1186,7 @@
   | `finish()` → `WordArena::new` | 長さ 12 ワード、全部 0 |
   | 新しい builder で `alloc(u32::MAX, 1)` → `alloc(1, 1)` | 1 回目は `Ok(0)`、2 回目は `Err` (溢れ) |
   | 新しい builder で `alloc(u32::MAX − 3, 1)` → `alloc(1, 8)` | 2 回目は `Err` (位置合わせで溢れる) |
-  | 新しい builder で `alloc(3, 1)` → `alloc(0, 8)` → `finish()` | 2 回目は `Ok(WordOffset(8))` (位置合わせしたオフセット)。長さは 3 のまま (領域を消費しない。Q-15) |
+  | 新しい builder で `alloc(3, 1)` → `alloc(0, 8)` → `finish()` | 2 回目は `Ok(WordOffset(3))` (整列せず現在位置。2026-11-27 マネージャ決定で変更)。長さは 3 のまま (領域を消費しない。Q-15) |
   | 新しい builder で `alloc(0, 1)` → `alloc(2, 1)` | `Ok(0)` → `Ok(0)` |
   | `alloc(1, 3)` / `alloc(1, 0)` / `alloc(1, 6)` | `Err(ArenaError::BadAlign)` (Q-15) |
   | 上の溢れの 2 行 | `Err(ArenaError::Overflow)` (Q-15) |
