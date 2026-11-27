@@ -19,8 +19,8 @@
 | M0-T2 + T12fix | CI・deny.toml + コーパスのレビュー修正 (波3) | implementer | done |
 | M0-T5 | 算術 (+ - * / % **、混在 pow_bits) (波4) | implementer | doing |
 | M0-T7 | リテラル・整数変換・文字列 (波4) | implementer | done |
-| M0-T8 | 実数変換・表示フォーマット (波4) | implementer | doing |
-| M0-T13 | コーパス段階評価 + CI corpus-fetch + 波3 nit (波4) | implementer | doing |
+| M0-T8 | 実数変換・表示フォーマット (波4) | implementer | done |
+| M0-T13 | コーパス段階評価 + CI corpus-fetch + 波3 nit (波4) | implementer | done |
 | M0-T11 | インターン・アリーナ (波5) | implementer | todo |
 | M0-T14 | 整理 (改名・補助統合・正規化修正) (波5) | implementer | todo |
 | M0-T9b | 参照モデル RealToIntStatus 4種化 (本体を読まない別個体) | implementer | doing |
@@ -66,3 +66,5 @@
 | 2026-11-27 | T13 追加項目 | fetch.rs: 禁止プロトコルに ftp/ftps、GIT_SSL_NO_VERIFY 等を env_remove、manifest の https は小文字に限定、LockGuard::drop で remove 直前に same_file 再確認。ci.yml: push は main のみ + pull_request、main では cancel-in-progress しない | マネージャ |
 | 2026-11-27 | 波構成の変更 | T14 は words.rs/vec.rs を触るため T5/T7/T8 と衝突 → 波5 (T11 と並行) に移す。参照モデルの RealToIntStatus 4種化は T9 担当エージェント (本体を読まない) に別途依頼 | マネージャ |
 | 2026-11-27 | T7 | リテラル幅 > MAX_WIDTH は Err(TooWide) (参照モデルは上限なし、差分テスト範囲外)。sema での警告/エラーは M1 で決める。文字列変換の層1版は作らない (JIT では層2を呼ぶ) | マネージャ |
+| 2026-11-27 | T13 | discover の解析エラーは当面 終了コード 0 + 件数表示。CI で件数 (1028) を検査する厳格モードは M1 で追加。GIT_ASKPASS 除去は社内 https 認証が必要になったら見直し | マネージャ |
+| 2026-11-27 | T8 | 幅0の表示は panic せず空/`0` (呼び出し側の誤り扱い)。T9b 完了後に diff_real_fmt へ状態の直接照合を追加 (T14 で実施)。10進表示 O(nw²) は M5 で必要なら改善 | マネージャ |
