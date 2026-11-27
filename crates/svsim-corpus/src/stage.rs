@@ -260,6 +260,11 @@ impl Pipeline {
 }
 
 /// 判定の規則 (モジュールの doc を参照)。
+///
+/// `should_fail` のケースでは、`target` より前の段階の `Fail` も [`Verdict::AsExpected`] にする
+/// (例: `target` が `Elaborate` で、`Preprocess` で失敗した場合)。期待した段階で失敗したかは
+/// 区別しない。これは plan.md §7.4 の暫定の規則 (「`target` までのどこかで `Fail` なら期待どおり」)
+/// で、M1 で runner が入ったときに見直す。
 pub fn judge(expect: &Expectation, stages: &[StageRecord]) -> Verdict {
     let failed = stages.iter().any(|r| r.outcome.kind() == OutcomeKind::Fail);
     let reached = stages

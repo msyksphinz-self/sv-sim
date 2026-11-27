@@ -90,9 +90,13 @@ impl Repo {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_with_cache(&self.cache(), args)
+    }
+
+    fn run_with_cache(&self, cache: &Path, args: &[&str]) -> Output {
         let mut a: Vec<&str> = args.to_vec();
         a.extend(["--manifest", &self.manifest, "--allow-file-protocol"]);
-        corpus(self.tmp.path(), &self.cache(), &a)
+        corpus(self.tmp.path(), cache, &a)
     }
 }
 
@@ -149,6 +153,26 @@ fn discover_and_run_end_to_end() {
     assert_eq!(bad["expect"]["reason"], "x");
     assert_eq!(bad["expect"]["target"], "Simulate");
     assert_eq!(bad["meta"]["type"], "simulation elaboration parsing");
+
+    // discover --json の出力はキャッシュの場所に依らない (絶対パスの checkout を含めない)
+    assert!(v.get("checkout").is_none(), "{v}");
+    let cache2 = r.tmp.path().join("another-cache");
+    let o = r.run_with_cache(&cache2, &["fetch", "demo"]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let o2 = r.run_with_cache(&cache2, &["discover", "demo", "--json"]);
+    assert_eq!(o2.status.code(), Some(0), "{}", stderr(&o2));
+    let json1 = r.run(&["discover", "demo", "--json"]).stdout;
+    assert_eq!(json1, o2.stdout);
+    let json1 = String::from_utf8(json1).unwrap();
+    for c in [r.cache(), cache2.clone()] {
+        assert!(!json1.contains(c.to_str().unwrap()), "{json1}");
+    }
+    // 場所は標準エラー出力に出す
+    assert!(
+        stderr(&o2).contains(cache2.to_str().unwrap()),
+        "{}",
+        stderr(&o2)
+    );
 
     // run を 2 回。所要時間以外は同じ
     let out1 = r.tmp.path().join("r1");

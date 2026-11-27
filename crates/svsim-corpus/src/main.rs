@@ -168,17 +168,10 @@ fn run(cli: Cli) -> Result<ExitCode, Failure> {
             print_diagnostics(&disc);
             let stats = disc.stats();
             if json {
-                let v = serde_json::json!({
-                    "entry": entry.name,
-                    "rev": entry.source.rev,
-                    "checkout": checkout,
-                    "stats": stats,
-                    "warnings": disc.warnings,
-                    "errors": disc.errors,
-                    "cases": disc.cases,
-                });
-                let text = serde_json::to_string_pretty(&v)
-                    .map_err(|e| Failure::Runtime(Error::Other(e.to_string())))?;
+                // チェックアウトの絶対パスは標準出力の JSON に入れない (キャッシュの場所に依らない
+                // 出力にするため)。場所は標準エラー出力に出す。
+                eprintln!("svsim-corpus: checkout: {}", checkout.display());
+                let text = discover_json(entry, &disc)?;
                 println!("{text}");
             } else {
                 println!(
@@ -277,6 +270,20 @@ fn discover_named<'m>(
     })?;
     let disc = discover::discover_entry(entry, &checkout)?;
     Ok((entry, checkout, disc))
+}
+
+/// `discover --json` の出力。チェックアウトの場所 (絶対パス) は含めない。
+/// ケースのパスはチェックアウトからの相対パスなので、出力はキャッシュの場所に依らない。
+fn discover_json(entry: &manifest::Entry, disc: &Discovery) -> Result<String, Failure> {
+    let v = serde_json::json!({
+        "entry": entry.name,
+        "rev": entry.source.rev,
+        "stats": disc.stats(),
+        "warnings": disc.warnings,
+        "errors": disc.errors,
+        "cases": disc.cases,
+    });
+    serde_json::to_string_pretty(&v).map_err(|e| Failure::Runtime(Error::Other(e.to_string())))
 }
 
 /// 列挙の警告とエラーを標準エラー出力に出す。

@@ -16,11 +16,26 @@
 //! - 既定値: `files` = そのファイル、`incdirs` = そのファイルのディレクトリ、`type` = `parsing elaboration`、
 //!   `should_fail` = `should_fail_because` があれば 1。`files` / `incdirs` / `defines` は空白区切りで、
 //!   明示された `files` と `incdirs` は `<root>/` からの相対パスとして解釈する。
+//!   明示された `files` / `incdirs` に絶対パス、`..`、プレフィックス (Windows の `C:` 等) を含むものが
+//!   あれば、そのケースは列挙から除外し、警告 ([`Discovery::warnings`]) にする
+//!   (取得したファイルは信頼しない入力なので、リポジトリの外を読まないため)。
 //! - 期待する段階 ([`Expectation::target`]) は `:type:` の語のうち最も後の段階。
 //! - `tags` によるライブラリの追加ファイル (sv-tests の `libs.json`) は M0 では扱わず、`meta` に残すだけ。
 //!
 //! sv-tests の runner は、対応する全キーが揃った時点で読むのをやめるが、ここでは常に全行を読む
 //! (固定コミットでは全キーを持つファイルは無いので、結果は変わらない)。
+//!
+//! ## sv-tests runner との違い
+//!
+//! 次の点は sv-tests の runner と意図的に変えてある (固定コミットでは結果は変わらない):
+//!
+//! - **値の末尾の空白を除く**。runner は `(.+)` の一致をそのまま使うので、値の末尾の空白が残る
+//!   (先頭の空白は `\s*` が取るので、どちらも残らない)。CRLF のファイルの `\r` を残さないため。
+//! - **明示された `:files:` を `tests/` と結合する**。runner は明示された `:files:` を `tests/` と
+//!   結合せず、そのまま (runner の作業ディレクトリからの相対パスとして) 使う。`:incdirs:` は runner も
+//!   `tests/` と結合する。ここでは plan.md §7.3 に従い、どちらも `<root>/` からの相対パスにそろえる
+//!   (固定コミットでは `:files:` を使うファイルは無い)。
+//! - 明示された `files` / `incdirs` のうちリポジトリの外を指しうるもの (上記) を持つケースは除外する。
 //!
 //! # パス
 //!
@@ -83,7 +98,9 @@ pub struct Diagnostic {
 pub struct Discovery {
     /// ケース。`id` のバイト順に並べてある (決定性のため)。
     pub cases: Vec<TestCase>,
-    /// 警告 (未知のメタデータのキーなど。ケースには含めている)。
+    /// 警告。未知のメタデータのキーなどはケースに含めたまま警告する。
+    /// 例外として、`:files:` / `:incdirs:` が不正なパス (絶対パス、`..` 等) のケースは、
+    /// ケースから除外したうえでここに入れる。
     pub warnings: Vec<Diagnostic>,
     /// エラー (読めない、UTF-8 でない等。ケースには含めていない)。
     pub errors: Vec<Diagnostic>,
@@ -102,7 +119,7 @@ pub struct DiscoverStats {
     pub by_type: BTreeMap<String, usize>,
     /// メタデータのキーごとの、そのキーを持つケースの数。
     pub keys: BTreeMap<String, usize>,
-    /// 警告の数。
+    /// 警告の数 (不正なパスで除外したケースの分も含む)。
     pub warnings: usize,
     /// エラー (解析できなかったファイル) の数。
     pub errors: usize,
@@ -247,7 +264,7 @@ pub fn discover_sv_tests(
                 path: rel_checkout.clone(),
                 message,
             }));
-        d.cases.push(case);
+        d.cases.extend(case);
     }
     d.cases.sort_by(|a, b| a.id.as_bytes().cmp(b.id.as_bytes()));
     Ok(d)
@@ -330,12 +347,45 @@ fn type_word_stage(word: &str) -> Option<Stage> {
     }
 }
 
+/// メタデータで明示された相対パスを検査する。
+///
+/// [`Component::Normal`] と [`Component::CurDir`] だけからなるパスなら `Some`。
+/// 絶対パス (`RootDir`)、`..` (`ParentDir`)、プレフィックス (`Prefix`) を含むなら `None`
+/// (`a/../../b` のように途中に `..` があるものも拒否する)。
+fn checked_rel_path(s: &str) -> Option<&Path> {
+    let p = Path::new(s);
+    p.components()
+        .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+        .then_some(p)
+}
+
+/// `:files:` / `:incdirs:` の値を空白で分け、`root` と結合する。
+/// 不正なパスがあれば、そのパスを `Err` で返す。
+fn explicit_paths(root: &Path, value: &str) -> Result<Vec<PathBuf>, String> {
+    value
+        .split_whitespace()
+        .map(|f| {
+            checked_rel_path(f)
+                .map(|p| root.join(p))
+                .ok_or_else(|| f.to_string())
+        })
+        .collect()
+}
+
 /// sv-tests の既定の `:type:`。
 pub const SV_TESTS_DEFAULT_TYPE: &str = "parsing elaboration";
 
 /// 1 ファイル分のケースを作る。`root` はチェックアウトからの `discover.root`、
 /// `rel` は root からのファイルの相対パス。警告のメッセージも返す。
-pub fn sv_tests_case(id: String, root: &Path, rel: &Path, text: &str) -> (TestCase, Vec<String>) {
+///
+/// 明示された `:files:` / `:incdirs:` に絶対パスや `..` 等を含むものがあれば、ケースは `None`
+/// にして、理由を警告に入れる (リポジトリの外を読まないため。モジュールの doc を参照)。
+pub fn sv_tests_case(
+    id: String,
+    root: &Path,
+    rel: &Path,
+    text: &str,
+) -> (Option<TestCase>, Vec<String>) {
     let mut warnings = Vec::new();
     let mut meta = BTreeMap::new();
     for (k, v) in parse_sv_tests_metadata(text) {
@@ -345,14 +395,34 @@ pub fn sv_tests_case(id: String, root: &Path, rel: &Path, text: &str) -> (TestCa
             warnings.push(format!("unsupported metadata key `{k}`; ignored"));
         }
     }
+
+    let mut bad_paths = Vec::new();
+    let mut explicit = |key: &str| -> Option<Vec<PathBuf>> {
+        let v = meta.get(key)?;
+        match explicit_paths(root, v) {
+            Ok(ps) => Some(ps),
+            Err(bad) => {
+                bad_paths.push(format!(
+                    ":{key}: path `{bad}` is absolute or contains `..` or a prefix; case excluded"
+                ));
+                Some(Vec::new())
+            }
+        }
+    };
+    let files = explicit("files");
+    let incdirs = explicit("incdirs");
+    if !bad_paths.is_empty() {
+        warnings.extend(bad_paths);
+        return (None, warnings);
+    }
     let get = |k: &str| meta.get(k).map(String::as_str);
 
-    let files = match get("files") {
-        Some(v) => v.split_whitespace().map(|f| root.join(f)).collect(),
+    let files = match files {
+        Some(v) => v,
         None => vec![root.join(rel)],
     };
-    let incdirs = match get("incdirs") {
-        Some(v) => v.split_whitespace().map(|f| root.join(f)).collect(),
+    let incdirs = match incdirs {
+        Some(v) => v,
         None => {
             let parent = rel.parent().filter(|p| !p.as_os_str().is_empty());
             vec![parent.map_or_else(|| root.to_path_buf(), |p| root.join(p))]
@@ -408,20 +478,25 @@ pub fn sv_tests_case(id: String, root: &Path, rel: &Path, text: &str) -> (TestCa
         },
         meta,
     };
-    (case, warnings)
+    (Some(case), warnings)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn case_of(text: &str) -> (TestCase, Vec<String>) {
+    fn try_case_of(text: &str) -> (Option<TestCase>, Vec<String>) {
         sv_tests_case(
             "sv-tests/a.sv".into(),
             Path::new("tests"),
             Path::new("a.sv"),
             text,
         )
+    }
+
+    fn case_of(text: &str) -> (TestCase, Vec<String>) {
+        let (c, w) = try_case_of(text);
+        (c.expect("case is not excluded"), w)
     }
 
     // TC76: 既定値
@@ -448,6 +523,7 @@ mod tests {
             Path::new("sub/dir/z.sv"),
             "",
         );
+        let c = c.unwrap();
         assert_eq!(c.files, vec![PathBuf::from("tests/sub/dir/z.sv")]);
         assert_eq!(c.incdirs, vec![PathBuf::from("tests/sub/dir")]);
     }
@@ -532,6 +608,49 @@ mod tests {
         assert_eq!(c.incdirs, vec![PathBuf::from("tests/inc")]);
         assert_eq!(c.defines, vec!["A=1".to_string(), "B".to_string()]);
         assert_eq!(c.top.as_deref(), Some("top"));
+    }
+
+    // 明示された :files: / :incdirs: がリポジトリの外を指しうるなら、ケースを除外して警告する
+    #[test]
+    fn explicit_paths_outside_root_exclude_the_case() {
+        for text in [
+            ":files: /etc/passwd\n",
+            ":files: ok.sv ../x.sv\n",
+            ":files: a/../../b.sv\n",
+            ":incdirs: /usr/include\n",
+            ":incdirs: ../inc\n",
+            ":incdirs: a/../../b\n",
+            ":files: a/../b.sv\n", // root の中に戻るが、`..` は一律に拒否する
+        ] {
+            let (c, w) = try_case_of(text);
+            assert!(c.is_none(), "{text:?}");
+            assert_eq!(w.len(), 1, "{text:?}: {w:?}");
+            assert!(w[0].contains("case excluded"), "{w:?}");
+        }
+        // `.` と `./x` は root の中なので受け付ける
+        let (c, w) = case_of(":files: ./x.sv\n:incdirs: .\n");
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(c.files, vec![PathBuf::from("tests/x.sv")]);
+        assert_eq!(c.incdirs, vec![PathBuf::from("tests")]);
+    }
+
+    #[test]
+    fn excluded_case_counts_as_warning() {
+        let d = tempfile::tempdir().unwrap();
+        let co = d.path();
+        write(co, "tests/a.sv", b":files: /etc/passwd\n");
+        write(co, "tests/b.sv", b":incdirs: ../x\n");
+        write(co, "tests/c.sv", b"");
+        let disc = discover_sv_tests("e", co, Path::new("tests")).unwrap();
+        let ids: Vec<&str> = disc.cases.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["e/c.sv"]);
+        assert_eq!(disc.warnings.len(), 2);
+        assert_eq!(disc.warnings[0].path, PathBuf::from("tests/a.sv"));
+        assert_eq!(disc.warnings[1].path, PathBuf::from("tests/b.sv"));
+        let s = disc.stats();
+        assert_eq!(s.total, 1);
+        assert_eq!(s.warnings, 2);
+        assert!(disc.errors.is_empty());
     }
 
     // TC76: :type: の語のうち最も後の段階
