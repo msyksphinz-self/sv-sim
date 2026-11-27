@@ -17,7 +17,7 @@
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
 use svsim_logic::{BitMut, BitRef, BitVec, L64, Logic, LogicMut, LogicRef, LogicVec, words_for};
-use svsim_logic_ref::RefVec;
+use svsim_logic_ref::{RefLogic, RefVec};
 
 // ===========================================================================
 // 幅
@@ -608,6 +608,74 @@ pub fn check_logic_eq_ref(
         "{}: value mismatch",
         ctx
     );
+    Ok(())
+}
+
+/// [`Logic`] を参照モデルの [`RefLogic`] にする (bits 文字列の 1 文字経由。§6.3.1 の 0/1/x/z)。
+pub fn logic_to_ref(x: Logic) -> RefLogic {
+    RefLogic::from_char(x.to_char()).expect("Logic::to_char is one of 0/1/x/z")
+}
+
+/// 参照モデルの [`RefLogic`] を [`Logic`] にする。
+pub fn logic_from_ref(x: RefLogic) -> Logic {
+    Logic::from_char(x.to_char()).expect("RefLogic::to_char is one of 0/1/x/z")
+}
+
+/// 1 ビットの結果 ([`Logic`]) が参照モデルの 1 ビットの結果 ([`RefLogic`]) と一致することを検査する
+/// (`RefVec::bit` や、`RefLogic` を返す参照モデルの関数の結果と比べるとき)。
+pub fn check_logic_eq_reflogic(
+    actual: Logic,
+    expected: RefLogic,
+    ctx: &str,
+) -> Result<(), TestCaseError> {
+    prop_assert_eq!(
+        actual.to_char(),
+        expected.to_char(),
+        "{}: value mismatch (actual {:?}, expected {:?})",
+        ctx,
+        actual,
+        expected
+    );
+    Ok(())
+}
+
+/// 2 値の 1 ビットの結果 (`bool`) が期待値と一致することを検査する。
+///
+/// 2 値版の期待値は「参照モデルの結果 → `to_two_state`」で作る (plan.md §5.2)。参照モデルの
+/// 1 ビットの結果から期待値を作るときは [`ref_to_two_state_bool`] を使う。
+pub fn check_bool_eq_ref(actual: bool, expected: bool, ctx: &str) -> Result<(), TestCaseError> {
+    prop_assert_eq!(actual, expected, "{}: value mismatch", ctx);
+    Ok(())
+}
+
+/// 参照モデルの 1 ビットの結果を 2 値化する (1 だけが真、0/x/z は偽。§6.11.2)。
+pub fn ref_to_two_state_bool(x: RefLogic) -> bool {
+    x == RefLogic::One
+}
+
+/// 列挙型の結果 (例: エッジ検出の `Edge`、§9.4.2) が参照モデルの結果 (例: `RefEdge`) と一致することを
+/// 検査する。
+///
+/// 本体と参照モデルの型は互いに依存しないので、**`Debug` の表示 (バリアント名) が同じ**ことで比べる
+/// (例: `Edge::Pos` と `RefEdge::Pos` はどちらも `"Pos"`)。バリアント名が対応しない型には使えない。
+/// その場合は [`check_value_eq`] に、期待値を本体の型に写したものを渡す。
+pub fn check_edge_eq_ref<A: core::fmt::Debug, E: core::fmt::Debug>(
+    actual: A,
+    expected: E,
+    ctx: &str,
+) -> Result<(), TestCaseError> {
+    let (a, e) = (format!("{actual:?}"), format!("{expected:?}"));
+    prop_assert_eq!(a, e, "{}: value mismatch", ctx);
+    Ok(())
+}
+
+/// 同じ型の 2 つの値 (`PartialEq + Debug`) が一致することを検査する汎用の補助。
+pub fn check_value_eq<T: PartialEq + core::fmt::Debug>(
+    actual: T,
+    expected: T,
+    ctx: &str,
+) -> Result<(), TestCaseError> {
+    prop_assert_eq!(actual, expected, "{}: value mismatch", ctx);
     Ok(())
 }
 

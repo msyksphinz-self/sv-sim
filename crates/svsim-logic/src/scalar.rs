@@ -102,8 +102,12 @@ impl L64 {
     }
 
     /// ビット `i` の値 (`i < 64`)。
+    ///
+    /// `i >= 64` は呼び出し側の誤りで、debug ビルドでは `debug_assert!` で検出する
+    /// (release ビルドではシフト量が 64 で割った余りになる)。
     #[inline]
     pub const fn bit(self, i: u32) -> Logic {
+        debug_assert!(i < 64, "L64::bit: index out of range (must be < 64)");
         Logic::from_words_lsb(self.a >> i, self.b >> i)
     }
 
@@ -257,6 +261,13 @@ mod tests {
             store2(u64::MAX, BitMut::new(w, &mut bw[..n]));
             assert_eq!(load2(BitRef::new(w, &bw[..n])), mask(w));
         }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "L64::bit")]
+    fn bit_rejects_index_64_in_debug() {
+        let _ = L64::new(!0, 0).bit(64);
     }
 
     #[test]
