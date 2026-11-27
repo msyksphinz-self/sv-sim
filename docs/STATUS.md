@@ -10,7 +10,7 @@
 | M0-TP | テスト計画 (82 項目、Q 残りは plan v2.1 で解消) | test-planner | done |
 | M0-T1 | workspace 骨組み (波1) | implementer | done |
 | M0-T3a | logic 中核の型・API・全スタブ (波2) | implementer | done |
-| M0-T9 | 参照モデル svsim-logic-ref (波2、独立実装) | implementer (別個体) | doing |
+| M0-T9 | 参照モデル svsim-logic-ref (波2、独立実装) | implementer (別個体) | done |
 | M0-T10 | ソースマップ・診断 (波2) | implementer | done |
 | M0-T12 | コーパスマネージャ雛形 (波2) | implementer | done |
 | M0-T3b/T4/T6/T2 | 波3 | implementer | todo |
