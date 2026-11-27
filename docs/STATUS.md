@@ -23,7 +23,7 @@
 | M0-T13 | コーパス段階評価 + CI corpus-fetch + 波3 nit (波4) | implementer | doing |
 | M0-T11 | インターン・アリーナ (波5) | implementer | todo |
 | M0-T14 | 整理 (改名・補助統合・正規化修正) (波5) | implementer | todo |
-| M0-T9b | 参照モデル RealToIntStatus 4種化 | implementer (T9 個体) | todo |
+| M0-T9b | 参照モデル RealToIntStatus 4種化 (本体を読まない別個体) | implementer | doing |
 | M0-TR | テスト実行 | test-runner | todo |
 
 ## 決定事項ログ
