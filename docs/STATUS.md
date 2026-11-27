@@ -6,9 +6,10 @@
 | タスク | 内容 | 担当 | 状態 |
 |---|---|---|---|
 | M0-P | M0 詳細計画 | planner | done |
-| M0-R | 計画レビュー | plan-reviewer | doing |
-| M0-TP | テスト計画 | test-planner | todo |
-| M0-T* | 実装 (計画で分解) | implementer | todo |
+| M0-R | 計画レビュー (条件付き承認 → v2 で反映) | plan-reviewer | done |
+| M0-TP | テスト計画 | test-planner | doing |
+| M0-T1 | workspace 骨組み (波1) | implementer | doing |
+| M0-T2〜T13 | 波2〜5 (plan.md §8.2) | implementer | todo |
 | M0-TR | テスト実行 | test-runner | todo |
 
 ## 決定事項ログ
@@ -20,3 +21,6 @@
 | 2026-11-27 | M0 U-4 CI | GitHub Actions を使用 | ユーザ |
 | 2026-11-27 | M0 U-5 action 固定 | コミット SHA で固定 | マネージャ |
 | 2026-11-27 | M0 U-7 未規定挙動 | M1 で確認用 SV テスト集を用意し、ユーザが業務環境の VCS で結果を確認する。それまでは暫定挙動 | ユーザ |
+| 2026-11-27 | M0 R-2 例外 | 2値ベクタを X インデックスで読むと 0 (§11.5.1 明文どおり) を採用 | マネージャ |
+| 2026-11-27 | M0 U-6 MAX_WIDTH | 2^24 ビットで確定 | マネージャ |
+| 2026-11-27 | M0 R-9/R-10 | atoi は符号を解析しない / ?: の z/z は X (LRM 優先)。VCS 確認リスト V-6/V-8 | マネージャ |

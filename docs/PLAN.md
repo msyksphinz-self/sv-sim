@@ -88,7 +88,9 @@ Rust で一から書く SystemVerilog シミュレータ。
 ## 3. 4 値ロジック表現 (`svsim-logic`)
 
 - VPI/DPI と同じ **aval/bval の 2 プレーン表現** `(a,b)=(0,0)→0,(1,0)→1,(0,1)→Z,(1,1)→X`。
-  → DPI の `svLogicVecVal` とメモリ表現が一致するので、DPI 呼び出し時の変換コストが小さい。
+  - 内部配置は 64bit ワード単位で aval プレーン / bval プレーンを分離する (M0 計画 D-1)。
+    DPI の `svLogicVecVal` (32bit で a/b 交互) とはゼロコピーにせず、4 値の packed 引数だけ境界で変換する (512bit でも数 ns)。
+    2 値 (`svBitVecVal`)・`int`/`longint`/`byte` 等は変換なしで渡せる。
 - 64bit ワード単位のビット並列演算。幅 ≤ 64 はインライン。
 - **2 値高速パス**: `bit`/`int` 型と、静的解析で X/Z が来ないと証明できた信号。
 - 幅規則・符号規則 (§11.6/11.8) を正確に実装する。参照モデルとの差分テストと proptest で徹底検証する。
@@ -132,7 +134,7 @@ Rust で一から書く SystemVerilog シミュレータ。
 
 | 用途 | 想定される形 | sv-sim 側の対応 |
 |---|---|---|
-| 擬似メモリ | C 側に巨大で疎なメモリを持ち、バス I/F のモデルが毎トランザクション `import "DPI-C" function` で read/write する。ELF のロードやバックドアアクセスもある | **呼び出し頻度が高い**ので、JIT コードから C 関数を直接呼ぶ最短経路にする (引数の変換なし、`svLogicVecVal` をそのまま渡す)。DPI 呼び出しのオーバーヘッドを単体ベンチマークで計測し、VCS 以下を目標にする |
+| 擬似メモリ | C 側に巨大で疎なメモリを持ち、バス I/F のモデルが毎トランザクション `import "DPI-C" function` で read/write する。ELF のロードやバックドアアクセスもある | **呼び出し頻度が高い**ので、JIT コードから C 関数を直接呼ぶ最短経路にする (2 値・整数型の引数は変換なし。4 値 packed 引数のみ軽量な配置変換)。DPI 呼び出しのオーバーヘッドを単体ベンチマークで計測し、VCS 以下を目標にする |
 | 機能呼び出し | C のモデルやライブラリ (チェッカ、リファレンスモデル、ログ) を呼ぶ。C から SV の export function/task を呼び返すこともある | export function は M3 で、時間を消費する export task は M7 で対応する。`svGetScope`/`svSetScope` を正しく実装する |
 | UART 模擬 | SV 側から送信バイトを C に渡して端末/ファイル/ソケットに出す。受信側は C からポーリングして入力を受け取る | ホスト OS への副作用があるので、**再実行 (§8) では C を呼ばず記録した戻り値を再生**し、出力を二重に送らないようにする。対話入力 (ソケット等) は記録されたものだけを再生する |
 
@@ -331,7 +333,7 @@ Rust で一から書く SystemVerilog シミュレータ。
 
 | M | 内容 | 完了条件 |
 |---|---|---|
-| **M0** 基盤 | workspace、`svsim-logic`、診断、アリーナ型状態管理、CI、コーパスマネージャの雛形 | logic の差分テスト合格、sv-tests のパース段階を計測開始 |
+| **M0** 基盤 | workspace、`svsim-logic`、診断、アリーナ型状態管理、CI、コーパスマネージャの雛形 | logic の差分テスト合格、sv-tests を取得・列挙できる (パース計測は M1) |
 | **M1** Verilog コア | プリプロセッサ、Verilog-2005 主要構文、イベントキュー、インタプリタ、`$display` 等 | 簡単な設計で Icarus と出力一致 |
 | **M2** ネットと inout | 多重ドライバ、強度、全ネット種別、`tran`、generate、parameter、function/task | open-drain バス等の inout テストに合格、ivtest の該当部分に合格 |
 | **M3** SV 設計記述 + DPI 基本 | `logic`、`always_*`、struct/enum/union、packed/unpacked 配列、package、interface/modport、**DPI-C import** | ibex / picorv32 等が動く。擬似メモリ相当の DPI モデルで CPU がプログラムを実行できる |
